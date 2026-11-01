@@ -762,10 +762,75 @@ function renderPanel(d, node = null) {
     </dl>
     <div class="badges">${badges}</div>
     ${palBlock(d)}
+    <div class="apps" id="apps"></div>
     <div class="actions"><button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>check connection</button><span id="pingres" class="muted"></span></div>`;
   $('ping').onclick = () => ping(d.ship);
   const dv = $('dive'); if (dv) dv.onclick = () => dive(node);
   const pb = $('palbtn'); if (pb) pb.onclick = () => palAction(d, node, pb.dataset.act === 'add');
+  loadApps(d.ship);
+}
+
+// ---------------------------------------------------------------- apps
+//
+// What a ship publishes for install comes from %treaty. A ship we haven't
+// looked up yet has to be asked first (an "ally", exactly what Landscape's
+// app search does); its desks then arrive one docket at a time.
+
+const okUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+const okHex = (c) => (/^[0-9a-f]{6}$/i.test(c || '') ? '#' + c : 'var(--line)');
+let appsPoll = null;
+async function loadApps(ship, until = 0) {
+  clearTimeout(appsPoll);
+  const el = $('apps');
+  if (!el || panelFor !== ship) return;
+  let r;
+  try { r = await get('/apps/' + ship); } catch { el.innerHTML = ''; return; }
+  if (panelFor !== ship || !$('apps')) return;
+  if (!r.treaty) { el.innerHTML = ''; return; }
+  const waiting = until && Date.now() < until;
+  const head = (extra = '') => `<div class="appshead"><h3>Apps</h3>${extra}</div>`;
+  if (!r.allied) {
+    el.innerHTML = head() + `<div class="appsnote"><button id="allybtn">Look up apps ${esc(ship)} publishes</button>
+      <span class="muted">Asks the ship for its app list through %treaty, the same as searching it in Landscape. It needs to be online.</span></div>`;
+    $('allybtn').onclick = async () => {
+      $('allybtn').disabled = true; $('allybtn').textContent = 'asking…';
+      const p = await fetch(`${API}/apps/${ship}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+      if (!p || !p.ok) { $('allybtn').textContent = p && p.status === 403 ? 'log in to look up apps' : 'lookup failed'; return; }
+      loadApps(ship, Date.now() + 60000);
+    };
+    return;
+  }
+  const got = new Set(r.apps.map((a) => a.desk));
+  const pending = r.desks.filter((d) => !got.has(d));
+  const cards = r.apps.sort((a, b) => a.title.localeCompare(b.title)).map((a) => {
+    const icon = okUrl(a.image)
+      ? `<img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="background:${okHex(a.color)}">`
+      : `<span class="appicon" style="background:${okHex(a.color)}">${esc((a.title || a.desk).slice(0, 1).toUpperCase())}</span>`;
+    return `<div class="app">${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}</span></div>
+      ${a.info ? `<div class="appinfo">${esc(a.info)}</div>` : ''}</div>
+      ${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div>`;
+  }).join('');
+  const status = pending.length && (waiting || r.apps.length)
+    ? `<div class="muted appsnote">${waiting ? 'loading' : 'waiting on'} ${pending.length} more: ${pending.map((d) => '%' + esc(d)).join(' ')}</div>`
+    : !r.desks.length ? `<div class="muted appsnote">${waiting ? `asking ${esc(ship)}…` : 'Publishes no apps, or hasn\'t answered yet.'}</div>` : '';
+  el.innerHTML = head(r.desks.length ? `<span class="muted">${r.desks.length}</span>` : '') + cards + status;
+  el.querySelectorAll('.appinstall').forEach((b) => (b.onclick = () => installApp(ship, b)));
+  // icons that fail to load fall back to a lettered tile
+  el.querySelectorAll('.app img').forEach((im) => (im.onerror = () => {
+    const t = document.createElement('span');
+    t.className = 'appicon'; t.style.background = im.style.background;
+    t.textContent = (im.closest('.app').querySelector('.apptitle b')?.textContent || '?').slice(0, 1).toUpperCase();
+    im.replaceWith(t);
+  }));
+  if (waiting && (pending.length || !r.desks.length)) appsPoll = setTimeout(() => loadApps(ship, until), 3000);
+}
+
+async function installApp(ship, b) {
+  const desk = b.dataset.desk;
+  if (!confirm(`Install "${b.dataset.title}" (%${desk}) from ${ship}?\n\nApps run on your ship with full access to it. Only install from publishers you trust.`)) return;
+  b.disabled = true; b.textContent = 'installing…';
+  const r = await fetch(`${API}/install/${ship}/${encodeURIComponent(desk)}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+  b.textContent = r && r.ok ? 'started · see Landscape' : r && r.status === 403 ? 'log in first' : 'failed';
 }
 
 // ---------------------------------------------------------------- %pals

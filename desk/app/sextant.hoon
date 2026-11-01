@@ -11,7 +11,7 @@
 ::    moons are not on azimuth, so we only know the moons our ship has
 ::    talked to (or our own, via jael).
 ::
-/-  vitals
+/-  vitals, docket
 /+  default-agent, dbug, server
 |%
 +$  versioned-state  $%(state-0 state-1)
@@ -53,6 +53,19 @@
   $:  outgoing=(jug ship @ta)
       incoming=(set ship)
       receipts=(map ship ?)
+  ==
+::  mirrors of %treaty types (sur/treaty.hoon on %landscape)
++$  treaty  [=ship =desk =case hash=@uv =docket:docket]
++$  treaty-update
+  $%  [%ini init=(map [=ship =desk] =treaty)]
+      [%add =treaty]
+      [%del =ship =desk]
+  ==
++$  ally-diff  $%([%add =ship] [%del =ship])
++$  ally-update
+  $%  ally-diff
+      [%ini init=(map ship (set [=ship =desk]))]
+      [%new =ship alliance=(set [=ship =desk])]
   ==
 ::  per-request context, scried once
 ::
@@ -147,9 +160,9 @@
 ++  on-agent
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _this)
-  ?.  ?=([?(%ping %pal) @ ~] wire)  (on-agent:def wire sign)
+  ?.  ?=([?(%ping %pal %ally %install) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
-  ~?  ?=(^ p.sign)  [dap.bowl i.wire %poke-failed i.t.wire]
+  ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
   `this
 ::
 ++  on-peek   on-peek:def
@@ -230,6 +243,29 @@
       =/  cmd=pal-command  ?:(del [%part u.who ~] [%meet u.who ~])
       :-  :*  %pass  /pal/(scot %p u.who)  %agent  [our.bowl %pals]
               %poke  %pals-command  !>(cmd)
+          ==
+      (give [[204 ~] ~])
+    ?:  &(?=([%apps @ ~] t.site) !get)
+      ::  look up the apps a ship publishes, via %treaty (owner only)
+      ::
+      =/  who  (slaw %p i.t.t.site)
+      ?~  who  (give [[400 ~] ~])
+      ?.  authed  (give [[403 ~] ~])
+      ?.  (running %treaty)  (give [[409 ~] ~])
+      :-  :*  %pass  /ally/(scot %p u.who)  %agent  [our.bowl %treaty]
+              %poke  %ally-update-0  !>(`ally-diff`[%add u.who])
+          ==
+      (give [[204 ~] ~])
+    ?:  ?=([%install @ @ ~] t.site)
+      ::  install a desk a ship publishes (owner only, POST)
+      ::
+      =/  who  (slaw %p i.t.t.site)
+      =*  d  i.t.t.t.site
+      ?.  &(?=(^ who) ((sane %tas) d))  (give [[400 ~] ~])
+      ?.  authed  (give [[403 ~] ~])
+      ?:  get  (give [[405 ~] ~])
+      :-  :*  %pass  /install/(scot %p u.who)/[d]  %agent  [our.bowl %hood]
+              %poke  %kiln-install  !>([`desk`d `ship`u.who `desk`d])
           ==
       (give [[204 ~] ~])
     ?.  get  (give [[405 ~] ~])
@@ -347,6 +383,12 @@
       gals   [(tiny g pos ctx ~ (lent ss) np) gals]
       stars  (weld (flop rows) stars)
     ==
+  ::  /api/apps/~sampel: what this ship publishes, as %treaty knows it
+  ::
+      [%apps @ ~]
+    =/  who  (slaw %p i.t.site)
+    ?~  who  ~
+    `(apps-json u.who)
   ::  /api/pals: our pals graph, with status
   ::
       [%pals ~]
@@ -478,6 +520,44 @@
     %duke  'planet'
     %earl  'moon'
     %pawn  'comet'
+  ==
+::
+::  +apps-json: allied?, published desks, and their dockets
+::
+++  apps-json
+  |=  who=ship
+  ^-  json
+  =,  enjs:format
+  ?.  (running %treaty)  (pairs ~[treaty+b+|])
+  =/  al  .^(ally-update %gx (bp %treaty /allies/ally-update-0))
+  =/  ali=(unit (set [@p @tas]))
+    ?.  ?=(%ini -.al)  ~
+    (~(get by init.al) who)
+  =/  tu  .^(treaty-update %gx (bp %treaty /treaties/(scot %p who)/treaty-update-0))
+  =/  ts=(list [[@p @tas] treaty])
+    ?.  ?=(%ini -.tu)  ~
+    ~(tap by init.tu)
+  =/  have  .^((set @tas) %cd (bp %base ~))
+  %-  pairs
+  :~  treaty+b+&
+      allied+b+?=(^ ali)
+      desks+a+?~(ali ~ (turn ~(tap in u.ali) |=([s=@p d=@tas] s+d)))
+      :-  %apps
+      :-  %a
+      %+  turn  ts
+      |=  [[s=@p d=@tas] t=treaty]
+      =/  k  docket.t
+      %-  pairs
+      :~  desk+s+d
+          title+s+title.k
+          info+s+info.k
+          color+s+(crip ((x-co:co 6) color.k))
+          image+?~(image.k ~ s+u.image.k)
+          version+s+(crip "{(scow %ud major.version.k)}.{(scow %ud minor.version.k)}.{(scow %ud patch.version.k)}")
+          website+s+website.k
+          license+s+license.k
+          installed+b+(~(has in have) d)
+      ==
   ==
 ::
 ::  +tiny: compact row for /api/tree

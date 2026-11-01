@@ -70,3 +70,5 @@ the owner's login.
 | `/api/kids/~p`, `/api/galaxies`, `/api/pals`, `/api/peers` | lists |
 | `/api/ping/~p` | latest `%vitals` result (POST starts a check: owner only) |
 | `/api/pal/~p` | POST adds a pal, DELETE removes one (owner only) |
+| `/api/apps/~p` | apps `~p` publishes, via `%treaty`; POST looks the ship up first (owner only) |
+| `/api/install/~p/desk` | POST installs that desk from `~p` through `%kiln-install` (owner only) |
