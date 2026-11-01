@@ -1,7 +1,7 @@
 :~  title+'Sextant'
     info+'A live map of the Urbit network: every galaxy, star and planet under its current sponsor, with pals, connection checks and the apps each ship publishes.'
     color+0x8.0c19
-    image+'/apps/sextant/icon'
+    image+'https://raw.githubusercontent.com/itsTylerIRL/sextant/main/desk/web/icon.png'
     version+[1 0 0]
     website+'https://tylerirl.com'
     license+'MIT'
