@@ -1,0 +1,10 @@
+:~  title+'Sextant'
+    info+'Explore the Urbit network: galaxies, stars, planets, moons, pals and who is online.'
+    color+0x8.0c19
+    image+'/apps/sextant/icon'
+    version+[0 1 0]
+    website+'https://tylerirl.com'
+    license+'MIT'
+    base+'sextant'
+    site+/apps/sextant
+==
