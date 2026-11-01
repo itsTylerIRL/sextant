@@ -56,7 +56,7 @@ function cls(s) {
 const isPal = (s) => !!(s.target || s.leech);
 const CLASSES = [
   ['live', 'live route'], ['dead', 'unreachable'], ['unborn', 'pending'],
-  ['keyed', 'booted, not contacted'], ['cold', 'spawned, never booted'], ['pal', '%pals'],
+  ['keyed', 'booted, not contacted'], ['cold', 'spawned, never booted'], ['pal', '%pals'], ['peer', 'peers'],
 ];
 const PRI = { cold: 0, keyed: 1, unborn: 2, dead: 3, live: 4 };
 const SIZE = { cold: 0.7, keyed: 0.9, unborn: 1, dead: 1, live: 1.15 };
@@ -211,8 +211,29 @@ function placeKids(node, kids, from, total, [q, r0]) {
     k.R = S.d * node.R * DISC;
   });
 }
+// ships our ship has talked to (ames peers), and the hosts they live under
+let PEERS = new Map(), PEER_HOSTS = new Set();
+async function loadPeers() {
+  try {
+    const ps = await cget('/peers', 60000);
+    PEERS = new Map(ps.map((p) => [p.ship, p]));
+    PEER_HOSTS = new Set();
+    for (const p of ps) {
+      for (let h = p.sponsor; h && h !== p.ship; ) {
+        if (PEER_HOSTS.has(h)) break;
+        PEER_HOSTS.add(h);
+        const n = T?.byName.get(h);
+        h = n?.parentNode?.ship;
+      }
+    }
+    if (T) for (const n of T.byName.values()) prep(n);
+    legend(); sky.dirty = true; kick();
+  } catch {}
+}
+
 function prep(n) {
   n.c = cls(n); n.pal = isPal(n); n.mine = myChain.has(n.ship);
+  n.peer = PEERS.has(n.ship); n.peerHost = PEER_HOSTS.has(n.ship);
   // adopted: sponsored by someone other than the ship that spawned it
   if (n.kind === 'planet') n.origin = n.parent;
   n.adopted = !!(n.parentNode && n.origin && n.origin !== n.parentNode.ship);
@@ -273,6 +294,7 @@ function resize() {
 
 function matches(n) {
   if (!sky.focus) return true;
+  if (sky.focus === 'peer') return n.peer || n.peerHost;
   return sky.focus === 'pal' ? n.pal : n.c === sky.focus;
 }
 
@@ -389,6 +411,7 @@ function drawNode(c, n, sx, sy, r, alpha) {
   c.globalAlpha = a; c.fillStyle = col;
   c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill();
   if (n.pal) { c.strokeStyle = P.accent; c.lineWidth = 1.2; c.beginPath(); c.arc(sx, sy, r + 2.5, 0, TAU); c.stroke(); }
+  if (sky.focus === 'peer' && n.peerHost && !n.peer) { c.strokeStyle = P.live; c.lineWidth = 1.2; c.setLineDash([3, 3]); c.beginPath(); c.arc(sx, sy, r + 4, 0, TAU); c.stroke(); c.setLineDash([]); }
   if (n.adopted && r > 1.5) { c.strokeStyle = P.accent; c.lineWidth = 1.2; c.setLineDash([2, 2]); c.beginPath(); c.arc(sx, sy, r + (n.pal ? 5 : 2.5), 0, TAU); c.stroke(); c.setLineDash([]); }
   // the selected ship wears its sigil once it is big enough to read
   if (n === sky.sel && r >= 11) {
@@ -637,7 +660,7 @@ function tip(n, pt) {
   if (!n) { el.hidden = true; return; }
   const rel = n.target && n.leech ? 'mutual pal' : n.target ? 'you added them' : n.leech ? 'they added you' : '';
   const spon = n.kind === 'galaxy' ? `sponsors ${n.ns} stars${n.np ? `, ${n.np} planets` : ''}` : n.kind === 'star' ? `sponsors ${n.n.toLocaleString()} planets · under ${n.parentNode.ship}` : `under ${n.parentNode?.ship ?? ''}`;
-  el.innerHTML = `<b>${esc(n.ship)}</b><span>${esc(n.kind)} · ${esc(n.life === 0 ? 'never booted' : statusText(n.status))}${n.status && n.last ? ' · ' + ago(n.last) : ''}</span><span>${esc(spon)}</span>${n.adopted ? `<span class="pal">adopted · spawned under ${esc(n.origin)}</span>` : ''}${n.scanned ? `<span>scan: ${esc({ yes: 'online', 'no-sponsor-hit': 'online (reachable via its sponsor)', 'no-sponsor-miss': 'offline', 'no-their-galaxy': 'unknown (its galaxy is unreachable)', timeout: 'no answer in 45s' }[n.scanned] || n.scanned)}</span>` : ''}${rel ? `<span class="pal">${rel}</span>` : ''}`;
+  el.innerHTML = `<b>${esc(n.ship)}</b><span>${esc(n.kind)} · ${esc(n.life === 0 ? 'never booted' : statusText(n.status))}${n.status && n.last ? ' · ' + ago(n.last) : ''}</span><span>${esc(spon)}</span>${n.adopted ? `<span class="pal">adopted · spawned under ${esc(n.origin)}</span>` : ''}${n.peer ? '<span>your ship has talked to it</span>' : ''}${n.scanned ? `<span>scan: ${esc({ yes: 'online', 'no-sponsor-hit': 'online (reachable via its sponsor)', 'no-sponsor-miss': 'offline', 'no-their-galaxy': 'unknown (its galaxy is unreachable)', timeout: 'no answer in 45s' }[n.scanned] || n.scanned)}</span>` : ''}${rel ? `<span class="pal">${rel}</span>` : ''}`;
   el.hidden = false;
   const x = Math.min(pt[0] + 14, sky.w - el.offsetWidth - 8), y = pt[1] + 16 + el.offsetHeight > sky.h ? pt[1] - el.offsetHeight - 10 : pt[1] + 16;
   el.style.transform = `translate(${x}px, ${y}px)`;
@@ -647,12 +670,12 @@ function legend() {
   const el = $('legend');
   if (!T) { el.innerHTML = ''; return; }
   const all = [...T.gals, ...T.gals.flatMap((g) => g.allStars)];
-  const count = (k) => all.filter((n) => (k === 'pal' ? n.pal : n.c === k)).length;
+  const count = (k) => (k === 'peer' ? PEERS.size : all.filter((n) => (k === 'pal' ? n.pal : n.c === k)).length);
   el.innerHTML = CLASSES.map(([k, label]) => {
     const n = count(k);
     if (!n) return '';
     if (k === 'cold') return `<button data-cold class="${showCold ? '' : 'off'}" title="${showCold ? 'hide' : 'show'} ships that were spawned but never booted"><i class="dot cold"></i>never booted <span>${showCold ? n.toLocaleString() : 'hidden'}</span></button>`;
-    return `<button data-focus="${k}" class="${sky.focus === k ? 'on' : ''}" title="show only: ${label} (counts are galaxies and stars)"><i class="dot ${k}"></i>${label} <span>${n.toLocaleString()}</span></button>`;
+    return `<button data-focus="${k}" class="${sky.focus === k ? 'on' : ''}" title="${k === 'peer' ? 'show only ships your ship has talked to, and the galaxies and stars they live under' : `show only: ${label} (counts are galaxies and stars)`}"><i class="dot ${k}"></i>${label} <span>${n.toLocaleString()}</span></button>`;
   }).join('');
   el.querySelectorAll('[data-focus]').forEach((b) => (b.onclick = () => {
     sky.focus = sky.focus === b.dataset.focus ? null : b.dataset.focus;
@@ -746,24 +769,33 @@ function renderPanel(d, node = null) {
     d.escape && `<span class="badge">escaping to ${esc(d.escape)}</span>`,
     !node && d.kind !== 'galaxy' && `<span class="badge">not on the chart (no sponsor or not on azimuth)</span>`,
   ].filter(Boolean).join('');
+  const pal = palParts(d);
   el.innerHTML = `
-    <div class="phead">${sigilBox(d)}<div><h2 class="pname">${dot(d.status)}${esc(d.ship)}</h2>
-    <div class="sub">${esc(d.kind)} · ${d.life === 0 ? 'never booted' : statusText(d.status)}${d.status ? ' · ' + ago(d.last) : ''}</div></div></div>
-    ${opens(node) ? `<button class="primary" id="dive">Zoom into ${node.kind === 'galaxy' ? 'its stars' : 'its planets'} ›</button>` : ''}
-    <dl class="facts">
-      <div><dt>sponsor</dt><dd>${link(d.sponsor)}${esc(sponsorNote)}</dd></div>
-      ${lfact('parent', d.parent)}
-      ${fact('life / rift', d.life == null ? null : `${d.life} / ${d.rift}`)}
-      ${fact('residents (sponsored)', d.residents)}
-      ${fact('escape requests', d.requests)}
-      ${fact('owner', d.owner)}
-      ${fact('management proxy', d.managementProxy)}
-      ${fact('spawn proxy', d.spawnProxy)}
-    </dl>
-    <div class="badges">${badges}</div>
-    ${palBlock(d)}
-    <div class="apps" id="apps"></div>
-    <div class="actions"><button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>check connection</button><span id="pingres" class="muted"></span></div>`;
+    <div class="phead">${sigilBox(d)}<div class="ptitle"><h2 class="pname">${dot(d.status)}${esc(d.ship)}</h2>
+    <div class="sub">${esc(d.kind)} · ${d.life === 0 ? 'never booted' : statusText(d.status)}${d.status ? ' · ' + ago(d.last) : ''}</div>
+    ${opens(node) ? `<button class="primary dive" id="dive">Zoom into ${node.kind === 'galaxy' ? 'its stars' : 'its planets'} ›</button>` : ''}</div></div>
+    <div class="seg ptabs" role="tablist">
+      <button role="tab" data-ptab="overview">Overview</button>
+      <button role="tab" data-ptab="apps">Apps <span id="appcount"></span></button>
+    </div>
+    <div class="ptab" data-pane="overview">
+      <div class="actrow">${pal.button}<button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>Check connection</button></div>
+      <div class="actnote">${pal.state}<span id="pingres"></span></div>
+      <dl class="facts">
+        <div><dt>sponsor</dt><dd>${link(d.sponsor)}${esc(sponsorNote)}</dd></div>
+        ${lfact('parent', d.parent)}
+        ${fact('life / rift', d.life == null ? null : `${d.life} / ${d.rift}`)}
+        ${fact('sponsors', d.residents == null ? null : `${d.residents} ship${d.residents === 1 ? '' : 's'}`)}
+        ${fact('escape requests', d.requests)}
+        ${afact('owner', d.owner)}
+        ${afact('management proxy', d.managementProxy)}
+        ${afact('spawn proxy', d.spawnProxy)}
+      </dl>
+      <div class="badges">${badges}</div>
+    </div>
+    <div class="ptab" data-pane="apps"><div class="apps" id="apps"></div></div>`;
+  showTab(panelTab);
+  el.querySelectorAll('[data-ptab]').forEach((b) => (b.onclick = () => showTab((panelTab = b.dataset.ptab))));
   $('ping').onclick = () => ping(d.ship);
   const dv = $('dive'); if (dv) dv.onclick = () => dive(node);
   const pb = $('palbtn'); if (pb) pb.onclick = () => palAction(d, node, pb.dataset.act === 'add');
@@ -788,7 +820,8 @@ async function loadApps(ship, until = 0) {
   if (panelFor !== ship || !$('apps')) return;
   if (!r.treaty) { el.innerHTML = ''; return; }
   const waiting = until && Date.now() < until;
-  const head = (extra = '') => `<div class="appshead"><h3>Apps</h3>${extra}</div>`;
+  const head = () => '';
+  const ac = $('appcount'); if (ac) ac.textContent = r.allied && r.desks.length ? r.desks.length : '';
   if (!r.allied) {
     el.innerHTML = head() + `<div class="appsnote"><button id="allybtn">Look up apps ${esc(ship)} publishes</button>
       <span class="muted">Asks the ship for its app list through %treaty, the same as searching it in Landscape. It needs to be online.</span></div>`;
@@ -813,7 +846,7 @@ async function loadApps(ship, until = 0) {
   const status = pending.length && (waiting || r.apps.length)
     ? `<div class="muted appsnote">${waiting ? 'loading' : 'waiting on'} ${pending.length} more: ${pending.map((d) => '%' + esc(d)).join(' ')}</div>`
     : !r.desks.length ? `<div class="muted appsnote">${waiting ? `asking ${esc(ship)}…` : 'Publishes no apps, or hasn\'t answered yet.'}</div>` : '';
-  el.innerHTML = head(r.desks.length ? `<span class="muted">${r.desks.length}</span>` : '') + cards + status;
+  el.innerHTML = cards + status;
   el.querySelectorAll('.appinstall').forEach((b) => (b.onclick = () => installApp(ship, b)));
   // icons that fail to load fall back to a lettered tile
   el.querySelectorAll('.app img').forEach((im) => (im.onerror = () => {
@@ -835,8 +868,36 @@ async function installApp(ship, b) {
 
 // ---------------------------------------------------------------- %pals
 
-function palBlock(d) {
-  if (!me?.pals || d.ship === me.ship) return '';
+// panel tabs: remembered across selections
+let panelTab = 'overview';
+function showTab(t) {
+  document.querySelectorAll('#panel [data-ptab]').forEach((b) => { b.classList.toggle('on', b.dataset.ptab === t); b.setAttribute('aria-selected', b.dataset.ptab === t); });
+  document.querySelectorAll('#panel [data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== t));
+}
+
+// eth addresses: short, click to copy, with an Etherscan link
+const isAddr = (a) => /^0x[0-9a-f]{40}$/i.test(a || '');
+function afact(k, a) {
+  if (!isAddr(a)) return fact(k, null);
+  return `<div><dt>${k}</dt><dd class="addr"><button class="copy" data-copy="${esc(a)}" title="copy ${esc(a)}">${esc(a.slice(0, 6) + '…' + a.slice(-4))}</button><a href="https://etherscan.io/address/${esc(a)}" target="_blank" rel="noopener noreferrer" title="open on Etherscan" aria-label="open on Etherscan">↗</a></dd></div>`;
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch {}
+  const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove(); return ok;
+}
+$('panel').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const was = b.textContent, ok = await copyText(b.dataset.copy);
+  b.textContent = ok ? 'copied' : 'copy failed'; b.classList.add('done');
+  setTimeout(() => { b.textContent = was; b.classList.remove('done'); }, 1200);
+});
+
+function palParts(d) {
+  if (!me?.pals || d.ship === me.ship) return { button: '', state: '' };
   let state;
   if (d.target && d.leech) state = '★ mutual pals';
   else if (d.target) state = 'you added them · ' + (d.palAck === true ? 'they got your request; waiting for them to add you back' : d.palAck === false ? 'they rejected the request' : "your request hasn't reached them yet");
@@ -845,7 +906,7 @@ function palBlock(d) {
   const btn = d.target
     ? '<button id="palbtn" data-act="del">Remove pal</button>'
     : `<button id="palbtn" class="primary" data-act="add">${d.leech ? 'Add back' : 'Add pal'}</button>`;
-  return `<div class="palrow"><span class="${d.target || d.leech ? 'pal' : 'muted'}">${esc(state)}</span>${btn}</div>`;
+  return { button: btn, state: `<span class="${d.target || d.leech ? 'pal' : 'muted'}">${esc(state)}</span>` };
 }
 
 async function palAction(d, node, add) {
@@ -981,7 +1042,6 @@ function row(s) {
   const meta = s.life === 0 ? 'no keys' : s.status === 'live' && s.last ? shortAgo(s.last) : scanWord[s.scanned] || (s.kind === 'star' && s.n ? s.n.toLocaleString() + 'p' : '');
   return `<a class="row${cold ? ' cold' : ''}${s.adopted ? ' adopted' : ''}" href="#/${esc(s.ship)}" data-ship="${esc(s.ship)}" title="${esc(s.ship)}${s.adopted ? ' · adopted from ' + esc(s.origin) : ''}">${dot(s.status)}<span class="nm">${esc(s.ship)}</span>${pal}<span class="meta">${esc(meta)}</span></a>`;
 }
-const tile = row;
 
 function list(el, title, ships, emptyMsg) {
   const filters = { all: () => true, live: (s) => s.status === 'live', booted: (s) => s.life > 0, pals: (s) => s.target || s.leech };
@@ -1030,6 +1090,7 @@ async function ensureTree() {
   T = buildTree(await get('/tree'));
   overlay(null);
   legend();
+  loadPeers();
   sky.dirty = true; kick();
 }
 
@@ -1101,10 +1162,64 @@ function normalize(q) {
   q = q.trim().toLowerCase().replace(/^~?/, '~').replace(/\s+/g, '');
   return /^~[a-z-]+$/.test(q) ? q : null;
 }
+// ---------------------------------------------------------------- search
+
+// suggestions: galaxies, sponsored stars and loaded planets from the tree,
+// plus pals and peers. Prefix matches first, then booted, then live ships.
+const sugg = { el: $('sugg'), q: $('q'), items: [], i: -1 };
+function suggest() {
+  const raw = sugg.q.value.trim().toLowerCase().replace(/^~/, '').replace(/\s+/g, '');
+  if (!raw || !/^[a-z-]+$/.test(raw)) return hideSugg();
+  const seen = new Set(), out = [];
+  const consider = (name, n) => {
+    if (seen.has(name)) return;
+    const bare = name.slice(1), at = bare.indexOf(raw);
+    if (at < 0 || (at > 0 && raw.length < 3)) return;
+    seen.add(name);
+    out.push({ name, n, score: (at === 0 ? 0 : 10) + (n && n.life > 0 ? 0 : 3) + (n && n.status === 'live' ? -1 : 0) + bare.length / 100 });
+  };
+  if (T) for (const [name, n] of T.byName) consider(name, n);
+  for (const [name, p] of PEERS) consider(name, T?.byName.get(name) || p);
+  for (const p of cache.get('/pals')?.v || []) consider(p.ship, T?.byName.get(p.ship) || p);
+  out.sort((a, b) => a.score - b.score);
+  sugg.items = out.slice(0, 8);
+  const typed = normalize(sugg.q.value);
+  if (typed && !seen.has(typed)) sugg.items.push({ name: typed, n: null, go: true });
+  sugg.i = sugg.items.length ? 0 : -1;
+  renderSugg();
+}
+function renderSugg() {
+  if (!sugg.items.length) return hideSugg();
+  sugg.el.innerHTML = sugg.items.map((it, i) => {
+    const n = it.n, kind = n?.kind || '', where = n?.parentNode?.ship || n?.sponsor || '';
+    return `<div class="srow${i === sugg.i ? ' on' : ''}" role="option" aria-selected="${i === sugg.i}" data-i="${i}">${it.go ? '<span class="sgo">go to</span>' : dot(n?.status)}<span class="nm">${esc(it.name)}</span>${n?.pal ? '<span class="pals">☆</span>' : ''}<span class="meta">${esc(kind)}${where && kind !== 'galaxy' ? ' · ' + esc(where) : ''}</span></div>`;
+  }).join('');
+  sugg.el.hidden = false; sugg.q.setAttribute('aria-expanded', 'true');
+}
+function hideSugg() { sugg.items = []; sugg.i = -1; sugg.el.hidden = true; sugg.q.setAttribute('aria-expanded', 'false'); }
+function pickSugg(i) {
+  const it = sugg.items[i];
+  if (!it) return;
+  hideSugg(); sugg.q.value = ''; sugg.q.blur();
+  location.hash = '#/' + it.name;
+}
+sugg.q.addEventListener('input', suggest);
+sugg.q.addEventListener('focus', suggest);
+sugg.q.addEventListener('blur', () => setTimeout(hideSugg, 150));
+sugg.q.addEventListener('keydown', (e) => {
+  if (sugg.el.hidden) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    sugg.i = (sugg.i + (e.key === 'ArrowDown' ? 1 : -1) + sugg.items.length) % sugg.items.length;
+    renderSugg();
+  } else if (e.key === 'Escape') hideSugg();
+});
+sugg.el.addEventListener('mousedown', (e) => { const r = e.target.closest('.srow'); if (r) { e.preventDefault(); pickSugg(+r.dataset.i); } });
 $('search').onsubmit = (e) => {
   e.preventDefault();
+  if (sugg.i >= 0 && !sugg.el.hidden) return pickSugg(sugg.i);
   const p = normalize($('q').value);
-  if (p) location.hash = '#/' + p;
+  if (p) { hideSugg(); $('q').value = ''; location.hash = '#/' + p; }
 };
 
 // keep it live: re-read the tree every 5 minutes without moving the view
@@ -1115,6 +1230,7 @@ setInterval(async () => {
     const selName = sky.sel?.ship, ctxName = sky.ctx?.ship;
     for (const k of [...cache.keys()]) if (k.startsWith('/residents/')) cache.delete(k);
     T = buildTree(raw);
+    cache.delete('/peers'); loadPeers();
     sky.ctx = null; sky.hover = null;
     sky.sel = selName ? T.byName.get(selName) || null : null;
     legend(); sky.dirty = true; kick();

@@ -307,31 +307,12 @@
         vitals+b+(running %vitals)
         points+(numb ~(wyt by points:nas))
     ==
-  ::  /api/galaxies: all 256
-  ::
-      [%galaxies ~]
-    =/  pos  points:nas
-    :-  ~
-    :-  %a
-    %+  turn  (gulf 0 255)
-    |=  g=@
-    (ship-json g (get-point pos g) ctx)
   ::  /api/ship/~sampel: one ship in detail
   ::
       [%ship @ ~]
     =/  who  (slaw %p i.t.site)
     ?~  who  ~
     `(detail-json u.who ctx)
-  ::  /api/kids/~sampel: spawned children (stars, planets) or known moons
-  ::
-      [%kids @ ~]
-    =/  who  (slaw %p i.t.site)
-    ?~  who  ~
-    :-  ~
-    :-  %a
-    %+  turn  (kids u.who ctx)
-    |=  [k=@p p=(unit point)]
-    (ship-json k p ctx)
   ::  /api/residents/~sampel: ships sponsored by this one
   ::
       [%residents @ ~]
@@ -451,48 +432,6 @@
     $(a (rsh 3 a), b (rsh 3 b), i +(i))
   (lth c d)
 ::
-::  +range: all points between .lo and .hi (inclusive, por order)
-::
-++  range
-  |=  [a=points lo=@p hi=@p]
-  =|  out=(list [ship point])
-  |-  ^+  out
-  ?~  a  out
-  =/  k=@p  -.n.a
-  =/  ge  (por lo k)
-  =/  le  (por k hi)
-  =?  out  le         $(a r.a)
-  =?  out  &(ge le)   [n.a out]
-  =?  out  ge         $(a l.a)
-  out
-::
-++  kids
-  |=  [who=ship =ctx]
-  ^-  (list [ship (unit point)])
-  ?+    (clan:title who)  ~
-      %czar
-    %+  murn  (range points:nas who (con who 0xffff.ff00))
-    |=  [k=ship p=point]
-    ?.(?=(%king (clan:title k)) ~ `[k `p])
-  ::
-      %king
-    %+  murn  (range points:nas who (con who 0xffff.0000))
-    |=  [k=ship p=point]
-    ?.(?=(%duke (clan:title k)) ~ `[k `p])
-  ::
-      %duke
-    ::  moons aren't on azimuth: show the ones ames has heard from
-    ::
-    =/  all=(set ship)
-      (~(uni in ~(key by chums.ctx)) ~(key by peers.ctx))
-    %+  turn
-      %+  sort
-        %+  skim  ~(tap in all)
-        |=(k=ship &(?=(%earl (clan:title k)) =(who (end 5 k))))
-      lth
-    |=(k=ship [k ~])
-  ==
-::
 ::  +status: what ames knows about our connection to .who
 ::
 ++  status
@@ -537,7 +476,7 @@
   =/  ts=(list [[@p @tas] treaty])
     ?.  ?=(%ini -.tu)  ~
     ~(tap by init.tu)
-  =/  have  .^((set @tas) %cd (bp %base ~))
+  =/  have  .^((set @tas) %cd (bp %$ ~))
   %-  pairs
   :~  treaty+b+&
       allied+b+?=(^ ali)

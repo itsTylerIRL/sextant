@@ -16,7 +16,8 @@
       <a href="#/peers" data-tab="peers">Peers</a>
     </nav>
     <form id="search" autocomplete="off">
-      <input id="q" placeholder="~sampel-palnet" spellcheck="false" aria-label="Go to ship">
+      <input id="q" placeholder="search ~sampel-palnet" spellcheck="false" aria-label="Go to ship" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="sugg" autocomplete="off">
+      <div id="sugg" class="sugg" role="listbox" hidden></div>
     </form>
     <span id="host" class="host"></span>
   </header>

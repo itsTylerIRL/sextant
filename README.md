@@ -67,7 +67,7 @@ the owner's login.
 | `/api/tree` | every galaxy plus every sponsored star, compact rows (cached, rebuilt every 5 min) |
 | `/api/ship/~p` | one point in detail, including sponsor, chain and pal receipt |
 | `/api/residents/~p` | ships sponsored by `~p`, plus pending escape requests |
-| `/api/kids/~p`, `/api/galaxies`, `/api/pals`, `/api/peers` | lists |
+| `/api/pals`, `/api/peers` | your pals; every ship your ship has talked to |
 | `/api/ping/~p` | latest `%vitals` result (POST starts a check: owner only) |
 | `/api/pal/~p` | POST adds a pal, DELETE removes one (owner only) |
 | `/api/apps/~p` | apps `~p` publishes, via `%treaty`; POST looks the ship up first (owner only) |
