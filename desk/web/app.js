@@ -60,7 +60,7 @@ const CLASSES = [
   ['keyed', 'booted, not contacted'], ['cold', 'spawned, never booted'], ['pal', '%pals'], ['peer', 'peers'],
 ];
 const PRI = { cold: 0, keyed: 1, stale: 1.5, unborn: 2, dead: 3, live: 4 };
-const SIZE = { cold: 0.7, keyed: 0.9, unborn: 1, dead: 1, live: 1.15 };
+const SIZE = { cold: 0.7, keyed: 0.9, stale: 0.95, unborn: 1, dead: 1, live: 1.15 };
 
 let P = {};
 function readPalette() {
@@ -402,7 +402,7 @@ function drawContainer(c, node, sx, sy, Rpx, later) {
 }
 
 function drawNode(c, n, sx, sy, r, alpha) {
-  r *= SIZE[n.c];
+  r *= SIZE[n.c] ?? 1;
   const a = (matches(n) ? 1 : 0.1) * alpha, col = P[n.c];
   if (a <= 0.01) return;
   if (n.c === 'live' || n.c === 'dead' || n.c === 'unborn') {
