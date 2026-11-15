@@ -201,6 +201,22 @@
       %handle-http-request
     =+  !<([eyre-id=@ta req=inbound-request:eyre] vase)
     =/  site  site:(parse-request-line:server url.request.req)
+    ::  POST /api/trace/~sampel: probe every hop between us and them now,
+    ::  past the usual limits (a handful of ships, asked for by the owner)
+    ::
+    ?:  ?&  ?=([%apps %sextant %api %trace @ ~] site)
+            ?=(%'POST' method.request.req)
+            authenticated.req
+        ==
+      =/  who  (slaw %p i.t.t.t.t.site)
+      ?~  who
+        :_  this
+        (give-simple-payload:app:server eyre-id [[400 ~] ~])
+      =^  cards  probes  (probe-ships:hc (turn (route:hc u.who) head) &)
+      :_  this
+      %+  weld  cards
+      %+  give-simple-payload:app:server  eyre-id
+      (json-response:gen:server (trace-json:hc u.who))
     ::  POST /api/status ["~zod", ...]: status for a batch of ships.
     ::  for the owner it also probes the ones we haven't heard from lately
     ::
@@ -279,7 +295,7 @@
     ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
     =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~ 0])
     `this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
-  ?.  ?=([?(%ping %pal %ally %install) *] wire)  (on-agent:def wire sign)
+  ?.  ?=([?(%ping %pal %ally %install %hi) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
   ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
   `this
@@ -350,6 +366,18 @@
             ==
         (give (json-response:gen:server (ping-json u.who)))
       (give (json-response:gen:server (ping-json u.who)))
+    ?:  ?=([%hi @ ~] t.site)
+      ::  say hi, like |hi: one message, which also introduces a comet
+      ::  to a ship that has never heard of it (owner only, POST)
+      ::
+      =/  who  (slaw %p i.t.t.site)
+      ?~  who  (give [[400 ~] ~])
+      ?.  authed  (give [[403 ~] ~])
+      ?:  get  (give [[405 ~] ~])
+      :-  :*  %pass  /hi/(scot %p u.who)  %agent  [our.bowl %hood]
+              %poke  %helm-send-hi  !>([u.who ~])
+          ==
+      (give [[204 ~] ~])
     ?:  ?=([%pal @ ~] t.site)
       ::  add (POST) or remove (DELETE) a pal; owner only
       ::
@@ -483,6 +511,13 @@
       gals   [(tiny g pos ctx ~ (lent ss) np) gals]
       stars  (weld (flop rows) stars)
     ==
+  ::  /api/trace/~sampel: the hops between us and them, with how each
+  ::  answered (see +trace-json)
+  ::
+      [%trace @ ~]
+    =/  who  (slaw %p i.t.site)
+    ?~  who  ~
+    `(trace-json u.who)
   ::  /api/apps/~sampel: what this ship publishes, as %treaty knows it
   ::
       [%apps @ ~]
@@ -633,16 +668,25 @@
 ::
 ++  send-probes
   |=  who=(list ship)
+  (probe-ships who |)
+::
+::  +probe-ships: .force skips +max-out and +want-probe's waits (but
+::  never doubles up on a probe already out)
+::
+++  probe-ships
+  |=  [who=(list ship) force=?]
   ^-  (quip card (map ship probe))
   =/  ps  probes
   =/  out=@ud  (lent (skim ~(val by ps) |=(p=probe (in-flight `p))))
   =|  cards=(list card)
   |-
   ?~  who  [cards ps]
-  ?:  (gte out max-out)  [cards ps]
+  ?:  &(!force (gte out max-out))  [cards ps]
   =*  w  i.who
   =/  p  (~(get by ps) w)
-  ?.  (want-probe w p)  $(who t.who)
+  ?.  ?:  force  &(!=(w our.bowl) !(in-flight p))
+      (want-probe w p)
+    $(who t.who)
   =/  wir  /(scot %p w)/(scot %da now.bowl)
   %=  $
     who    t.who
@@ -847,6 +891,93 @@
   =/  up  (^sein:title who)
   ?:  =(up who)  ~[who]
   [who $(who up)]
+::
+::  +chain: .who and its current sponsors, up to a galaxy.  comets and
+::  moons aren't on azimuth, so they go up by parent.
+::
+++  chain
+  |=  [pos=points who=ship]
+  ^-  (list ship)
+  =|  out=(list ship)
+  =|  n=@ud
+  |-
+  =.  out  [who out]
+  ?:  |(?=(%czar (clan:title who)) (gte n 4))  (flop out)
+  =/  pin  (get-point pos who)
+  =/  up=ship
+    ?.  &(?=(^ pin) has.sponsor.net.u.pin)  (^sein:title who)
+    who.sponsor.net.u.pin
+  ?:  =(up who)  (flop out)
+  $(who up, n +(n))
+::
+::  +route: the hops a packet climbs from us to .who: up our sponsor
+::  chain to where it meets theirs (or to our galaxy), then down theirs
+::
+++  route
+  |=  who=ship
+  ^-  (list [ship ?(%us %them %both)])
+  =/  pos   points:nas
+  =/  us    (chain pos our.bowl)
+  =/  them  (chain pos who)
+  =/  ts    (silt them)
+  =/  up=(list ship)
+    =|  acc=(list ship)
+    |-
+    ?~  us  (flop acc)
+    ?:  (~(has in ts) i.us)  (flop [i.us acc])
+    $(us t.us, acc [i.us acc])
+  =/  m    (rear up)
+  =/  met  (~(has in ts) m)
+  =/  down=(list ship)
+    %-  flop
+    ?.  met  them
+    (scag (need (find ~[m] them)) them)
+  %+  weld
+    (turn up |=(s=ship ^-([ship ?(%us %them %both)] [s ?:(&(met =(s m)) %both %us)])))
+  (turn down |=(s=ship ^-([ship ?(%us %them %both)] [s %them])))
+::
+::  +lane-kind: how ames would reach .who: a direct address, only via
+::  relays, no address at all (e.g. a galaxy with no dns), or unknown
+::
+++  lane-kind
+  |=  [who=ship =ctx]
+  ^-  @t
+  ?:  =(who our.bowl)  'self'
+  ?:  =(`%known (~(get by peers.ctx) who))
+    =/  s  .^(ship-state:ames %ax (bp %$ /peers/(scot %p who)))
+    ?.  ?=(%known -.s)  'unknown'
+    ?~  route.+.s  'none'
+    ?:(direct.u.route.+.s 'direct' 'relayed')
+  ?:  =(`%known (~(get by chums.ctx) who))  'mesa'
+  'unknown'
+::
+::  +trace-json: [{ship kind side status last rtt waiting lane}, ...]
+::  rtt (ms) is from the last probe, if it has been answered
+::
+++  trace-json
+  |=  who=ship
+  ^-  json
+  =/  =ctx  get-ctx
+  :-  %a
+  %+  turn  (route who)
+  |=  [hop=ship side=?(%us %them %both)]
+  =/  q  (status hop ctx)
+  =/  p  (~(get by probes) hop)
+  =,  enjs:format
+  %-  pairs
+  :~  ship+s+(scot %p hop)
+      kind+s+(kind hop)
+      side+s+side
+      status+?~(q ~ s+kind.u.q)
+      last+?~(q ~ ?:(=(*@da last.u.q) ~ (time last.u.q)))
+    ::
+      :-  %rtt
+      ?.  &(?=(^ p) (gth got.u.p sent.u.p))  ~
+      (numb (div (mul (sub got.u.p sent.u.p) 1.000) ~s1))
+    ::
+      waiting+b+(in-flight p)
+      lane+s+(lane-kind hop ctx)
+  ==
 ::
 ++  addr
   |=  a=address

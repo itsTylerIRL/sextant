@@ -258,3 +258,17 @@ b.on { color: var(--live); font-weight: 600; }
 .addr .copy.done { color: var(--live); }
 .addr a { text-decoration: none; color: var(--muted); font-size: 12px; }
 .addr a:hover { color: var(--accent); }
+
+/* ---- route tracer ---- */
+.trace:empty { display: none; }
+.trace { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.hops { display: flex; flex-direction: column; gap: 3px; }
+.hop { display: grid; grid-template-columns: 10px 92px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.hop .role { color: var(--muted); font-size: 11px; }
+.hop a { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hop .meta { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+.hop.bad a { color: var(--dead); }
+.hop.wait { opacity: .7; }
+.trace .verdict { margin: 8px 0 0; line-height: 1.4; }
+.trace b.off { color: var(--dead); font-weight: 600; }
+.trace button { margin-top: 8px; font-size: 12px; padding: 5px 11px; }

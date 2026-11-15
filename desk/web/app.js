@@ -573,6 +573,7 @@ function draw(now) {
   let loop = !!sky.fly || sky.dirty;
   if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; } else sweepPrev = null;
   if (blips.length) { drawBlips(c, now); loop = true; }
+  if (trace && T) { drawTrace(c, now); loop = true; }
   if (!sky.fly) {
     const live = sky.drawn.filter((n) => n.c === 'live' && matches(n));
     if (!reduceMotion && live.length && live.length < 3000) {
@@ -768,6 +769,7 @@ const opens = openable;
 
 let panelFor = null;
 async function select(n) {
+  if (trace && (!n || n.ship !== trace.ship)) stopTrace();
   sky.sel = n; kick();
   renderContext();
   if (!n) { panelFor = null; renderPanel(null); return; }
@@ -825,8 +827,9 @@ function renderPanel(d, node = null) {
       <button role="tab" data-ptab="apps">Apps <span id="appcount"></span></button>
     </div>
     <div class="ptab" data-pane="overview">
-      <div class="actrow">${pal.button}<button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>Check connection</button></div>
+      <div class="actrow">${pal.button}<button id="tracebtn" title="Check every ship a packet passes through between you and ${esc(d.ship)}">Trace route</button><button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>Check connection</button></div>
       <div class="actnote">${pal.state}<span id="pingres"></span></div>
+      <div class="trace" id="trace"></div>
       <dl class="facts">
         <div><dt>sponsor</dt><dd>${link(d.sponsor)}${esc(sponsorNote)}</dd></div>
         ${lfact('parent', d.parent)}
@@ -843,6 +846,8 @@ function renderPanel(d, node = null) {
   showTab(panelTab);
   el.querySelectorAll('[data-ptab]').forEach((b) => (b.onclick = () => showTab((panelTab = b.dataset.ptab))));
   $('ping').onclick = () => ping(d.ship);
+  $('tracebtn').onclick = () => startTrace(d.ship);
+  if (trace && trace.ship === d.ship) renderTrace();
   const dv = $('dive'); if (dv) dv.onclick = () => dive(node);
   const pb = $('palbtn'); if (pb) pb.onclick = () => palAction(d, node, pb.dataset.act === 'add');
   loadApps(d.ship);
@@ -1082,6 +1087,156 @@ async function ping(p) {
     }
   } catch (e) { out.textContent = 'error: ' + e.message; }
   btn.disabled = false;
+}
+
+// ---------------------------------------------------------------- route tracer
+//
+// The hops a packet climbs from us to a ship: up our sponsor chain to where
+// it meets theirs (or galaxy to galaxy), then down. Tracing probes every hop
+// at once; the map draws the route and the panel says where it breaks.
+
+let trace = null; // { ship, hops, t0, poll }
+const LANE = { direct: 'direct', relayed: 'via relay', none: 'no address', mesa: 'mesa', unknown: '', self: '' };
+
+function hopRole(h, i, hops) {
+  if (h.lane === 'self') return 'you';
+  if (i === hops.length - 1) return 'target';
+  const g = h.kind === 'galaxy';
+  if (h.side === 'us') return g ? 'your galaxy' : 'your sponsor';
+  if (h.side === 'both') return g ? 'shared galaxy' : 'shared sponsor';
+  return g ? 'their galaxy' : 'their sponsor';
+}
+// the first hop that has finished without answering, or -1
+const breakAt = (hops) => hops.findIndex((h, i) => i > 0 && h.lane !== 'self' && !h.waiting && h.status !== 'live');
+
+async function startTrace(ship) {
+  stopTrace();
+  const el = $('trace');
+  if (el) el.innerHTML = '<div class="muted">tracing…</div>';
+  const r = await fetch(`${API}/trace/${ship}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+  if (!r || !r.ok) { if (el) el.textContent = r && r.status === 403 ? 'log in to trace routes' : 'trace failed'; return; }
+  trace = { ship, hops: await r.json(), t0: performance.now() };
+  fitTrace(); renderTrace(); kick(); pollTrace();
+}
+function pollTrace() {
+  const t = trace;
+  if (!t) return;
+  if (!t.hops.some((h) => h.waiting) || performance.now() - t.t0 > 30000) return;
+  t.poll = setTimeout(async () => {
+    try {
+      const hops = await get('/trace/' + t.ship);
+      if (trace !== t) return;
+      t.hops = hops; landTrace(hops); renderTrace(); kick();
+    } catch {}
+    pollTrace();
+  }, 1000);
+}
+function stopTrace() { if (trace) clearTimeout(trace.poll); trace = null; kick(); }
+
+// what a trace learns about each hop is a real status: show it on the map
+function landTrace(hops) {
+  let any = false;
+  for (const h of hops) {
+    const n = T?.byName.get(h.ship);
+    if (!n || h.waiting || (n.status === h.status && n.last === h.last)) continue;
+    seen.set(h.ship, { status: h.status, last: h.last, t: Date.now() });
+    applyResult(n, { st: h.status, last: h.last }); any = true;
+  }
+  if (any) afterApply(true);
+}
+
+// zoom out (or in) so every hop on the chart fits
+function fitTrace() {
+  const ns = trace.hops.map((h) => T?.byName.get(h.ship)).filter((n) => n && n.x != null);
+  if (ns.length < 2) return;
+  const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  flyTo((x0 + x1) / 2, (y0 + y1) / 2, fitZ(Math.max(x1 - x0, y1 - y0, 0.004) * 0.62));
+}
+
+function renderTrace() {
+  const el = $('trace');
+  if (!el || !trace || panelFor !== trace.ship) return;
+  const hops = trace.hops, b = breakAt(hops), waiting = hops.filter((h) => h.waiting).length;
+  const rows = hops.map((h, i) => {
+    const bad = i === b, meta = h.waiting ? 'asking…' : [h.rtt != null ? h.rtt + 'ms' : h.status === 'live' ? '' : 'no answer', LANE[h.lane]].filter(Boolean).join(' · ');
+    return `<div class="hop${bad ? ' bad' : ''}${h.waiting ? ' wait' : ''}">${h.lane === 'self' ? '<i class="dot live"></i>' : dot(h.waiting ? null : h.status)}<span class="role">${esc(hopRole(h, i, hops))}</span><a href="#/${esc(h.ship)}" title="${esc(h.ship)}">${esc(h.ship)}</a><span class="meta">${esc(meta)}</span></div>`;
+  }).join('');
+  let verdict = '', hi = null;
+  const tgt = hops[hops.length - 1];
+  if (waiting) verdict = `tracing… ${hops.length - 1 - waiting} of ${hops.length - 1} hops have answered`;
+  else if (b < 0) verdict = `<b class="on">Route OK.</b> ${esc(tgt.ship)} answers${tgt.rtt != null ? ` in ${tgt.rtt}ms` : ''}.`;
+  else {
+    const h = hops[b], later = hops.slice(b + 1).find((x) => x.status === 'live');
+    if (later) { verdict = `${esc(h.ship)} didn't answer, but ${esc(later.ship)} behind it did, so it's up. It has probably just never heard of your ship.`; hi = h.ship; }
+    else if (h.lane === 'none' && h.kind === 'galaxy') verdict = `<b class="off">Breaks at ${esc(h.ship)}.</b> Your ship has no address for this galaxy (it has no DNS entry), so nothing under it can be reached from here.`;
+    else if (b === hops.length - 1) verdict = `<b class="off">${esc(h.ship)} didn't answer.</b> Everything up to it is fine, so it's probably offline.`;
+    else verdict = `<b class="off">Breaks at ${esc(h.ship)}</b> (${esc(hopRole(h, b, hops))}): no answer in 20s.`;
+  }
+  el.innerHTML = `<div class="hops">${rows}</div><p class="verdict">${verdict}</p>${hi ? `<button id="hibtn" title="Send ${esc(hi)} one hello, like |hi, so it learns of your ship">Say hi to ${esc(hi)}</button>` : ''}`;
+  const hb = $('hibtn');
+  if (hb) hb.onclick = async () => {
+    hb.disabled = true; hb.textContent = 'saying hi…';
+    const r = await fetch(`${API}/hi/${hi}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+    if (!r || !r.ok) { hb.textContent = r && r.status === 403 ? 'log in first' : 'failed'; return; }
+    setTimeout(() => { if (trace && panelFor === trace.ship) startTrace(trace.ship); }, 2500);
+  };
+}
+
+// the route on the map: solid up to the break, dashed after, a pulse
+// running along the part that works, and a ring on every hop
+function drawTrace(c, now) {
+  const hops = trace.hops, b = breakAt(hops);
+  const pts = [];
+  hops.forEach((h, i) => {
+    const n = T.byName.get(h.ship);
+    if (!n || n.x == null) return;
+    const [x, y] = toScreen(n.x, n.y);
+    pts.push({ x, y, h, i, r: Math.max(n.sr || 0, 3) });
+  });
+  if (!pts.length) return;
+  c.lineWidth = 2;
+  for (let k = 1; k < pts.length; k++) {
+    const p0 = pts[k - 1], p1 = pts[k], into = p1.i;
+    const ok = b < 0 ? !p1.h.waiting : into < b;
+    c.strokeStyle = ok ? P.live : into === b ? P.dead : P.muted;
+    c.globalAlpha = ok ? 0.85 : 0.6;
+    c.setLineDash(ok ? [] : [5, 5]);
+    c.lineDashOffset = p1.h.waiting ? -now / 40 : 0;
+    c.beginPath(); c.moveTo(p0.x, p0.y); c.lineTo(p1.x, p1.y); c.stroke();
+  }
+  c.setLineDash([]); c.lineDashOffset = 0;
+  // pulse along the working stretch
+  const good = pts.filter((p) => (b < 0 ? !p.h.waiting : p.i < b));
+  if (good.length > 1 && !reduceMotion) {
+    const seg = [];
+    let L = 0;
+    for (let k = 1; k < good.length; k++) { const d = Math.hypot(good[k].x - good[k - 1].x, good[k].y - good[k - 1].y); seg.push(d); L += d; }
+    let at = ((now / 1800) % 1) * L, k = 0;
+    while (k < seg.length - 1 && at > seg[k]) { at -= seg[k]; k++; }
+    const f = seg[k] ? at / seg[k] : 0, a0 = good[k], a1 = good[k + 1];
+    const x = a0.x + (a1.x - a0.x) * f, y = a0.y + (a1.y - a0.y) * f;
+    c.globalAlpha = 1; c.fillStyle = P.live;
+    c.beginPath(); c.arc(x, y, 3.5, 0, TAU); c.fill();
+    c.globalAlpha = 0.25; c.beginPath(); c.arc(x, y, 8, 0, TAU); c.fill();
+  }
+  // hop rings and names
+  c.font = '11px ui-monospace, "SF Mono", Menlo, monospace'; c.textAlign = 'left';
+  const placed = [];
+  for (const p of pts) {
+    const w = p.h.waiting, col = w ? P.ink : p.h.status === 'live' ? P.live : P.dead;
+    c.globalAlpha = w ? 0.4 + 0.4 * Math.sin(now / 200) : 0.9;
+    c.strokeStyle = col; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(p.x, p.y, p.r + 5, 0, TAU); c.stroke();
+    // name only the galaxies and the target, and never on top of another
+    if (!(p.h.kind === 'galaxy' || p.i === hops.length - 1)) continue;
+    if (placed.some(([x, y]) => Math.abs(x - p.x) < 90 && Math.abs(y - p.y) < 14)) continue;
+    placed.push([p.x, p.y]);
+    c.globalAlpha = 1; c.lineWidth = 3.5; c.strokeStyle = P.bg; c.lineJoin = 'round';
+    const label = p.h.ship.length > 16 ? p.h.ship.slice(0, 14) + '…' : p.h.ship;
+    c.strokeText(label, p.x + p.r + 9, p.y + 4); c.fillStyle = col; c.fillText(label, p.x + p.r + 9, p.y + 4);
+  }
+  c.globalAlpha = 1; c.lineWidth = 1;
 }
 
 // ---------------------------------------------------------------- list view
