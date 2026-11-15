@@ -162,7 +162,7 @@ function buildTree(raw, at = Date.now()) {
   for (const r of raw.s) {
     const g = gals[r[1]];
     g.allStars.push({ ship: r[0], kind: 'star', idx: r[2], status: ST[r[3]], life: r[4] < 0 ? null : r[4],
-      target: !!(r[5] & 1), leech: !!(r[5] & 2), n: r[6], kids: [], allPlanets: [], parentNode: g,
+      target: !!(r[5] & 1), leech: !!(r[5] & 2), n: r[6], escape: r[7] || null, kids: [], allPlanets: [], parentNode: g,
       origin: gals[hash8(r[0])]?.ship });
   }
   const G = spiral(256, ...SP.galaxy);
@@ -325,7 +325,10 @@ function resize() {
   sky.dirty = true; kick();
 }
 
+// owner view: the points an address controls, and the hosts they sit in
+let OWNED = null, OWNED_HOSTS = new Set(), OWNER = null;
 function matches(n) {
+  if (OWNED) return OWNED.has(n.ship) || OWNED_HOSTS.has(n.ship);
   if (!sky.focus) return true;
   if (sky.focus === 'peer') return n.peer || n.peerHost;
   return sky.focus === 'pal' ? n.pal : n.c === sky.focus;
@@ -599,6 +602,8 @@ function draw(now) {
   if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; } else sweepPrev = null;
   if (blips.length) { drawBlips(c, now); loop = true; }
   if (trace && T) { drawTrace(c, now); loop = true; }
+  if (T && !sky.fly) { drawEscapes(c); drawWatched(c); }
+  if (glides.length) { drawGlides(c, now); loop = true; }
   if (!sky.fly) {
     const live = sky.drawn.filter((n) => n.c === 'live' && matches(n));
     if (!reduceMotion && live.length && live.length < 3000) {
@@ -740,12 +745,15 @@ function legend() {
   if (!T) { el.innerHTML = ''; return; }
   const all = [...T.gals, ...T.gals.flatMap((g) => g.allStars)];
   const count = (k) => (k === 'peer' ? PEERS.size : all.filter((n) => (k === 'pal' ? n.pal : n.c === k)).length);
-  el.innerHTML = CLASSES.map(([k, label]) => {
+  const ownerChip = OWNED ? `<button data-owner class="on" title="stop highlighting this address's points">◎ ${esc(OWNER.slice(0, 6) + '…' + OWNER.slice(-4))} · ${OWNED.size} ✕</button>` : '';
+  el.innerHTML = ownerChip + CLASSES.map(([k, label]) => {
     const n = count(k);
     if (!n) return '';
     if (k === 'cold') return `<button data-cold class="${showCold ? '' : 'off'}" title="${showCold ? 'hide' : 'show'} ships that were spawned but never booted"><i class="dot cold"></i>never booted <span>${showCold ? n.toLocaleString() : 'hidden'}</span></button>`;
     return `<button data-focus="${k}" class="${sky.focus === k ? 'on' : ''}" title="${k === 'peer' ? 'show only ships your ship has talked to, and the galaxies and stars they live under' : `show only: ${label} (counts are galaxies and stars)`}"><i class="dot ${k}"></i>${label} <span>${n.toLocaleString()}</span></button>`;
   }).join('');
+  const oc = el.querySelector('[data-owner]');
+  if (oc) oc.onclick = () => { OWNED = null; OWNER = null; OWNED_HOSTS = new Set(); sky.dirty = true; legend(); kick(); };
   el.querySelectorAll('[data-focus]').forEach((b) => (b.onclick = () => {
     sky.focus = sky.focus === b.dataset.focus ? null : b.dataset.focus;
     sky.dirty = true; legend(); kick();
@@ -852,7 +860,7 @@ function renderPanel(d, node = null) {
       <button role="tab" data-ptab="apps">Apps <span id="appcount"></span></button>
     </div>
     <div class="ptab" data-pane="overview">
-      <div class="actrow">${pal.button}<button id="tracebtn" title="Check every ship a packet passes through between you and ${esc(d.ship)}">Trace route</button><button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>Check connection</button></div>
+      <div class="actrow">${pal.button}<button id="watchbtn" class="${d.watched ? 'on' : ''}" title="${d.watched ? 'stop watching' : 'get a Landscape notification when it stops answering, comes back, or changes on Azimuth'}">${d.watched ? '★ Watching' : '☆ Watch'}</button><button id="tracebtn" title="Check every ship a packet passes through between you and ${esc(d.ship)}">Trace route</button><button id="ping" ${me?.vitals ? '' : 'disabled title="needs %vitals (landscape)"'}>Check connection</button></div>
       <div class="actnote">${pal.state}<span id="pingres"></span></div>
       <div class="trace" id="trace"></div>
       <dl class="facts">
@@ -872,6 +880,7 @@ function renderPanel(d, node = null) {
   el.querySelectorAll('[data-ptab]').forEach((b) => (b.onclick = () => showTab((panelTab = b.dataset.ptab))));
   $('ping').onclick = () => ping(d.ship);
   $('tracebtn').onclick = () => startTrace(d.ship);
+  $('watchbtn').onclick = () => toggleWatch(d, node);
   if (trace && trace.ship === d.ship) renderTrace();
   const dv = $('dive'); if (dv) dv.onclick = () => dive(node);
   const pb = $('palbtn'); if (pb) pb.onclick = () => palAction(d, node, pb.dataset.act === 'add');
@@ -963,7 +972,7 @@ function showTab(t) {
 const isAddr = (a) => /^0x[0-9a-f]{40}$/i.test(a || '');
 function afact(k, a) {
   if (!isAddr(a)) return fact(k, null);
-  return `<div><dt>${k}</dt><dd class="addr"><button class="copy" data-copy="${esc(a)}" title="copy ${esc(a)}">${esc(a.slice(0, 6) + '…' + a.slice(-4))}</button><a href="https://etherscan.io/address/${esc(a)}" target="_blank" rel="noopener noreferrer" title="open on Etherscan" aria-label="open on Etherscan">↗</a></dd></div>`;
+  return `<div><dt>${k}</dt><dd class="addr"><button class="copy" data-copy="${esc(a)}" title="copy ${esc(a)}">${esc(a.slice(0, 6) + '…' + a.slice(-4))}</button><a href="#/owner/${esc(a.toLowerCase())}" title="every point this address controls" aria-label="every point this address controls">◎</a><a href="https://etherscan.io/address/${esc(a)}" target="_blank" rel="noopener noreferrer" title="open on Etherscan" aria-label="open on Etherscan">↗</a></dd></div>`;
 }
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; } catch {}
@@ -1272,6 +1281,173 @@ function drawTrace(c, now) {
   c.globalAlpha = 1; c.lineWidth = 1;
 }
 
+// ---------------------------------------------------------------- feed
+//
+// Azimuth events as %azimuth reports them (breaches, first boots, key
+// changes, escapes, transfers), and the ships the owner watches. New
+// events pop up on the map; a finished escape glides the ship to its new
+// sponsor. Pending escape requests are drawn as dashed arcs.
+
+let WATCHED = null;      // ships we watch
+let EVENTS = [], evNewest = 0;
+const glides = [];
+const EVICO = { breach: '⟲', keys: '⚿', sponsor: '⇢', escape: '↝', owner: '⇄', layer2: '②' };
+const EVNAME = { breach: 'breaches', keys: 'keys & boots', escape: 'escape requests', sponsor: 'escapes done', owner: 'transfers', layer2: 'layer 2' };
+
+async function toggleWatch(d, node) {
+  const b = $('watchbtn'), add = !d.watched;
+  b.disabled = true;
+  const r = await fetch(`${API}/watch/${d.ship}`, { method: add ? 'POST' : 'DELETE', credentials: 'include' }).catch(() => null);
+  b.disabled = false;
+  if (!r || !r.ok) { b.textContent = r && r.status === 403 ? 'log in first' : 'failed'; return; }
+  d.watched = add; cache.delete('/ship/' + d.ship);
+  if (!WATCHED) WATCHED = new Set();
+  add ? WATCHED.add(d.ship) : WATCHED.delete(d.ship);
+  b.classList.toggle('on', add); b.textContent = add ? '★ Watching' : '☆ Watch';
+  kick();
+}
+
+async function pollEvents() {
+  try {
+    const ev = await get('/events');
+    const newest = ev[0]?.at || 0;
+    if (evNewest && newest > evNewest) {
+      for (const e of ev.filter((x) => x.at > evNewest).slice(0, 4).reverse()) { toast(e); glideFor(e); }
+    }
+    evNewest = Math.max(evNewest, newest) || newest;
+    EVENTS = ev;
+    if (location.hash === '#/feed') drawFeed();
+  } catch {}
+}
+setInterval(() => { if (!document.hidden && me) pollEvents(); }, 60000);
+
+function evLine(e) {
+  return `<b>${esc(e.ship)}</b> ${esc(e.text)}`;
+}
+function toast(e) {
+  const box = $('toasts');
+  if (!box || $('explore').hidden) return;
+  const a = document.createElement('a');
+  a.className = 'toast'; a.href = '#/' + e.ship;
+  a.innerHTML = `<span class="evico">${EVICO[e.what] || '•'}</span><span>${evLine(e)}</span>`;
+  box.prepend(a);
+  while (box.children.length > 4) box.lastChild.remove();
+  setTimeout(() => { a.classList.add('out'); setTimeout(() => a.remove(), 700); }, 9000);
+}
+// a finished escape: the ship flies from where it sat to its new sponsor
+function glideFor(e) {
+  if (e.what !== 'sponsor' || !e.to || reduceMotion || !T) return;
+  const n = T.byName.get(e.ship), h = T.byName.get(e.to);
+  if (!n || !h || n.x == null || h.x == null) return;
+  glides.push({ x0: n.x, y0: n.y, x1: h.x, y1: h.y, t0: performance.now(), n });
+  kick();
+}
+function drawGlides(c, now) {
+  for (let i = glides.length - 1; i >= 0; i--) {
+    const g = glides[i], p = (now - g.t0) / 2600;
+    if (p >= 1) { glides.splice(i, 1); continue; }
+    const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    const [a0, b0] = toScreen(g.x0, g.y0), [a1, b1] = toScreen(g.x1, g.y1);
+    const mx = (a0 + a1) / 2 - (b1 - b0) * 0.25, my = (b0 + b1) / 2 + (a1 - a0) * 0.25;
+    const q = (t) => [(1 - t) * (1 - t) * a0 + 2 * (1 - t) * t * mx + t * t * a1, (1 - t) * (1 - t) * b0 + 2 * (1 - t) * t * my + t * t * b1];
+    c.strokeStyle = P.accent; c.lineWidth = 1.5; c.globalAlpha = 0.5 * (1 - p);
+    c.beginPath();
+    for (let t = Math.max(0, e - 0.25); t <= e; t += 0.02) { const [x, y] = q(t); t === Math.max(0, e - 0.25) ? c.moveTo(x, y) : c.lineTo(x, y); }
+    c.stroke();
+    const [x, y] = q(e);
+    c.globalAlpha = 1; c.fillStyle = P.accent;
+    c.beginPath(); c.arc(x, y, 4, 0, TAU); c.fill();
+  }
+  c.globalAlpha = 1;
+}
+// pending escape requests: a dashed arc from the ship to where it asked to go
+function drawEscapes(c) {
+  c.save();
+  c.strokeStyle = P.accent; c.lineWidth = 1.2; c.setLineDash([4, 4]);
+  for (const n of sky.drawn) {
+    if (!n.escape) continue;
+    const h = T.byName.get(n.escape);
+    if (!h || h.x == null) continue;
+    const [a1, b1] = toScreen(h.x, h.y), a0 = n.sx, b0 = n.sy;
+    const mx = (a0 + a1) / 2 - (b1 - b0) * 0.2, my = (b0 + b1) / 2 + (a1 - a0) * 0.2;
+    c.globalAlpha = matches(n) ? 0.65 : 0.12;
+    c.beginPath(); c.moveTo(a0, b0); c.quadraticCurveTo(mx, my, a1, b1); c.stroke();
+    c.setLineDash([]); c.beginPath(); c.arc(a1, b1, 2.5, 0, TAU); c.fillStyle = P.accent; c.fill(); c.setLineDash([4, 4]);
+  }
+  c.restore();
+}
+// watched ships wear a small four-point marker
+function drawWatched(c) {
+  if (!WATCHED?.size) return;
+  c.strokeStyle = P.accent; c.lineWidth = 1.3; c.globalAlpha = 0.9;
+  for (const n of sky.drawn) {
+    if (!WATCHED.has(n.ship)) continue;
+    const r = n.sr + 7;
+    c.beginPath();
+    for (let q = 0; q < 4; q++) {
+      const a = Math.PI / 4 + (q * TAU) / 4;
+      c.moveTo(n.sx + Math.cos(a) * r, n.sy + Math.sin(a) * r);
+      c.lineTo(n.sx + Math.cos(a) * (r + 4), n.sy + Math.sin(a) * (r + 4));
+    }
+    c.stroke();
+  }
+  c.globalAlpha = 1;
+}
+
+const feedUi = { kind: null };
+async function feedView() {
+  setTab('feed'); mapMode(false);
+  crumbs.innerHTML = '<b>feed</b><span class="muted crumbnote">azimuth events, and the ships you watch</span>';
+  const [w] = await Promise.all([get('/watch').catch(() => []), pollEvents()]);
+  if (location.hash !== '#/feed') return;
+  WATCHED = new Set(w.map((x) => x.ship));
+  $('view').innerHTML = `<section class="card" id="wl"></section>
+    <section class="card"><div class="lhead"><div class="ltitle"><h2>Azimuth events</h2><span class="count" id="evn"></span></div>
+      <div class="chips" id="evk"></div></div>
+      <div class="evrows" id="evr"></div></section>`;
+  list($('wl'), 'Watching ★', w, 'Not watching any ships. Open a ship and click ☆ Watch to get a Landscape notification when it stops answering, comes back, or changes on Azimuth.');
+  drawFeed();
+}
+function drawFeed() {
+  const el = $('evr');
+  if (!el) return;
+  const counts = {};
+  for (const e of EVENTS) counts[e.what] = (counts[e.what] || 0) + 1;
+  $('evk').innerHTML = [`<button data-k="" class="${feedUi.kind ? '' : 'on'}">all <span>${EVENTS.length}</span></button>`,
+    ...Object.keys(EVNAME).filter((k) => counts[k]).map((k) => `<button data-k="${k}" class="${feedUi.kind === k ? 'on' : ''}">${EVICO[k]} ${EVNAME[k]} <span>${counts[k]}</span></button>`)].join('');
+  $('evk').querySelectorAll('[data-k]').forEach((b) => (b.onclick = () => { feedUi.kind = b.dataset.k || null; drawFeed(); }));
+  const rows = EVENTS.filter((e) => !feedUi.kind || e.what === feedUi.kind);
+  $('evn').textContent = rows.length ? `${rows.length} since this ship started listening` : '';
+  el.innerHTML = rows.length ? rows.slice(0, 300).map((e) => `<a class="evrow${WATCHED?.has(e.ship) ? ' watched' : ''}" href="#/${esc(e.ship)}"><span class="t" title="${esc(new Date(e.at).toLocaleString())}">${esc(ago(e.at))}</span><span class="evico">${EVICO[e.what] || '•'}</span><span>${evLine(e)}</span></a>`).join('')
+    : '<div class="evnote muted">Nothing yet. Sextant starts listening to %azimuth when it is installed, and new breaches, first boots, key changes, escapes and transfers show up here (and pop up on the map) as they happen.</div>';
+}
+
+async function ownerView(addr) {
+  setTab(''); mapMode(false);
+  const short = addr.slice(0, 6) + '…' + addr.slice(-4);
+  crumbs.innerHTML = `<b>owner ${esc(short)}</b><span class="muted crumbnote">every point this address owns or is a proxy for</span>`;
+  if (!/^0x[0-9a-f]{40}$/.test(addr)) { $('view').innerHTML = '<section class="card err">That isn\'t an Ethereum address.</section>'; return; }
+  $('view').innerHTML = '<section class="card"><div class="muted evnote">scanning azimuth…</div></section>';
+  const pts = await get('/owner/' + addr);
+  if (location.hash !== '#/owner/' + addr) return;
+  const by = (k) => pts.filter((p) => p.kind === k).length;
+  const owns = pts.filter((p) => p.roles.includes('owner')).length;
+  $('view').innerHTML = `<section class="card"><div class="ownhead">
+      <code>${esc(addr)}</code>
+      <span class="stats">${owns} owned · ${pts.length - owns} as proxy only · ${['galaxy', 'star', 'planet'].map((k) => `${by(k)} ${k}${by(k) === 1 ? '' : 's'}`).join(' · ')}</span>
+      <button id="ownmap" ${pts.length ? '' : 'disabled'}>Highlight on the map</button>
+      <a href="https://etherscan.io/address/${esc(addr)}" target="_blank" rel="noopener noreferrer">Etherscan ↗</a>
+    </div><div id="ol"></div></section>`;
+  list($('ol'), 'Points', pts, 'This address controls no points.');
+  $('ownmap').onclick = () => {
+    OWNER = addr; OWNED = new Set(pts.map((p) => p.ship)); OWNED_HOSTS = new Set();
+    for (const p of pts) for (let h = p.sponsor || p.parent; h; ) { if (OWNED_HOSTS.has(h)) break; OWNED_HOSTS.add(h); const n = T?.byName.get(h); h = n?.parentNode?.ship; }
+    sky.dirty = true;
+    location.hash = '#/';
+    setTimeout(legend, 300);
+  };
+}
+
 // ---------------------------------------------------------------- list view
 
 const shortAgo = (ms) => (ms ? ago(ms).replace(' ago', '') : '');
@@ -1358,6 +1534,10 @@ async function route() {
     if (h === 'pals') return await pals();
     if (h === 'peers') return await peers();
     if (h === 'apps') return await appsView();
+    if (h === 'feed') return await feedView();
+    if (h.startsWith('owner/')) return await ownerView(h.slice(6).toLowerCase());
+    if (!WATCHED) { try { WATCHED = new Set((await get('/watch')).map((x) => x.ship)); } catch { WATCHED = new Set(); } }
+    if (!evNewest) pollEvents();
     setTab('net'); mapMode(true);
     await ensureTree();
     const instant = firstRoute; firstRoute = false;
@@ -1576,6 +1756,8 @@ sugg.el.addEventListener('mousedown', (e) => { const r = e.target.closest('.srow
 $('search').onsubmit = (e) => {
   e.preventDefault();
   if (sugg.i >= 0 && !sugg.el.hidden) return pickSugg(sugg.i);
+  const addr = $('q').value.trim().toLowerCase();
+  if (/^0x[0-9a-f]{40}$/.test(addr)) { hideSugg(); $('q').value = ''; location.hash = '#/owner/' + addr; return; }
   const p = normalize($('q').value);
   if (p) { hideSugg(); $('q').value = ''; location.hash = '#/' + p; }
 };

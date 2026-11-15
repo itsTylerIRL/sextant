@@ -24,7 +24,7 @@
 /-  vitals, docket
 /+  default-agent, dbug, server, gossip
 |%
-+$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5)
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6)
 +$  state-0  [%0 public=?]
 ::  tree: cached /api/tree body, rebuilt by a behn timer; not persisted
 ::  next: when that timer fires, so a reload can cancel it
@@ -88,6 +88,59 @@
 +$  app-card  [title=@t info=@t color=@ux image=@t version=@t]
 +$  app-hits  [card=app-card ids=(map @uv [at=@da on=?])]
 +$  hit       [id=@uv app=[=ship =desk] at=@da on=? card=app-card]
+::  events: what %azimuth told us happened, newest first (capped)
+::  watch:  ships the owner wants to hear about (Landscape notifications)
+::
++$  state-6
+  $:  %6
+      public=?
+      next=(unit @da)
+      tree=(unit octs)
+      probes=(map ship probe)
+      dirty=?
+      share=?
+      mine=(map [ship desk] [at=@da id=@uv])
+      hits=(map [ship desk] app-hits)
+      events=(list event)
+      watch=(set ship)
+  ==
++$  event  [at=@da who=ship what=ev]
++$  ev
+  $%  [%breach rift=@ud]                ::  factory reset
+      [%keys life=@ud]                  ::  new networking keys (1: first boot)
+      [%sponsor to=(unit ship)]         ::  escape done, or sponsor dropped
+      [%escape to=(unit ship)]          ::  escape requested, or cancelled
+      [%owner to=@ux]                   ::  transferred
+      [%layer2 ~]                       ::  moved to layer 2
+  ==
+++  max-events  500
+::  mirror of the %point arm of diff:naive (lib/naive.hoon on %base)
++$  point-diff
+  $:  %point  ship=@p
+      $%  [%rift rift=@ud]
+          [%keys keys=[life=@ud suite=@ud auth=@ crypt=@]]
+          [%sponsor sponsor=(unit @p)]
+          [%escape to=(unit @p)]
+          [%owner address=@ux]
+          [%spawn-proxy address=@ux]
+          [%management-proxy address=@ux]
+          [%voting-proxy address=@ux]
+          [%transfer-proxy address=@ux]
+          [%dominion dominion=?(%l1 %l2 %spawn)]
+  ==  ==
+::  mirrors of %hark's new-yarn action (sur/hark.hoon on %landscape)
++$  hark-flag     (pair ship term)
++$  hark-rope     [gop=(unit hark-flag) can=(unit (pair term hark-flag)) des=desk ted=path]
++$  hark-content  $@(@t $%([%ship p=ship] [%emph p=cord]))
++$  hark-action-1
+  $:  %new-yarn
+      all=?
+      desk=?
+      rop=hark-rope
+      con=(list hark-content)
+      wer=path
+      but=(unit [title=cord handler=path])
+  ==
 ++  hops      2
 ++  gossip-config  |=(on=? `config:gossip`[?:(on hops 0) %mutuals %mutuals |])
 ::  mirror of $pike (sur/hood.hoon on %base)
@@ -181,7 +234,7 @@
     :~  [%sextant-hit |=(n=* !>(((soft hit) n)))]
     ==
 %-  agent:dbug
-=|  state-5
+=|  state-6
 =*  state  -
 ^-  agent:gall
 =<
@@ -202,8 +255,10 @@
   |=  old-vase=vase
   ^-  (quip card _this)
   =/  old  !<(versioned-state old-vase)
-  =/  new=state-5
-    ?:  ?=(%5 -.old)  old(tree ~)
+  =/  new=state-6
+    ?:  ?=(%6 -.old)  old(tree ~)
+    =;  f=state-5  [%6 public.f next.f ~ probes.f dirty.f share.f mine.f hits.f ~ ~]
+    ?:  ?=(%5 -.old)  old
     =;  n=state-4  [%5 public.n next.n tree.n probes.n dirty.n & ~ ~]
     ?-  -.old
       %0  [%4 public.old ~ ~ ~ |]
@@ -239,6 +294,21 @@
       %handle-http-request
     =+  !<([eyre-id=@ta req=inbound-request:eyre] vase)
     =/  site  site:(parse-request-line:server url.request.req)
+    ::  POST/DELETE /api/watch/~sampel: watch a ship, or stop
+    ::
+    ?:  ?&  ?=([%apps %sextant %api %watch @ ~] site)
+            ?=(?(%'POST' %'DELETE') method.request.req)
+            authenticated.req
+        ==
+      =/  who  (slaw %p i.t.t.t.t.site)
+      ?~  who  [(give-simple-payload:app:server eyre-id [[400 ~] ~]) this]
+      =/  add=?  ?=(%'POST' method.request.req)
+      =.  watch  ?:(add (~(put in watch) u.who) (~(del in watch) u.who))
+      =^  cards  probes
+        ?.  add  [~ probes]
+        (probe-ships:hc ~[u.who] &)
+      :_  this
+      (weld cards (give-simple-payload:app:server eyre-id [[204 ~] ~]))
     ::  POST /api/share/on, /api/share/off: gossip our installs, or not
     ::
     ?:  ?&  ?=([%apps %sextant %api %share ?(%on %off) ~] site)
@@ -328,6 +398,14 @@
     ::
     =^  hit-cards  state  (sync-installs:hc state)
     =.  cards  (weld cards hit-cards)
+    ::  watched ships: every five minutes, never backed off
+    ::
+    =^  watch-cards  probes  (probe-ships:hc (skim ~(tap in watch) due-watch:hc) &)
+    =.  cards  (weld cards watch-cards)
+    ::  hear about azimuth events
+    ::
+    =?  cards  !(~(has by wex.bowl) [/azimuth our.bowl %azimuth])
+      [[%pass /azimuth %agent [our.bowl %azimuth] %watch /event] cards]
     :-  [[%pass /tree %arvo %b %wait nex] cards]
     ?.  |(dirty ?=(~ tree))  this(next `nex)
     this(next `nex, tree `tree-octs:hc, dirty |)
@@ -337,7 +415,9 @@
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=([%ames %sage *] sign-arvo))  `this
     =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~ 0])
-    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
+    :_  this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
+    ?.  &((~(has in watch) u.who) =(`| ok.p))  ~
+    (notify:hc u.who 'is answering again')
   ::  a probe's time is up: cancel it if it's still out
   ::
   ?:  ?=([%yawn @ @ ~] wire)
@@ -347,7 +427,9 @@
     =/  p  (~(get by probes) u.who)
     ?.  &(?=(^ p) =(sent.u.p u.at) (lth got.u.p sent.u.p))  `this
     :_  this(probes (~(put by probes) u.who u.p(ok `|, miss +(miss.u.p))), dirty &)
-    [%pass /probe/(scot %p u.who)/(scot %da u.at) %arvo %a %yawn u.who (probe-path u.at)]~
+    :-  [%pass /probe/(scot %p u.who)/(scot %da u.at) %arvo %a %yawn u.who (probe-path u.at)]
+    ?.  &((~(has in watch) u.who) =(`& ok.u.p))  ~
+    (notify:hc u.who 'stopped answering')
   ?.  ?=([%eyre %connect ~] wire)  (on-arvo:def wire sign-arvo)
   ?>  ?=([%eyre %bound *] sign-arvo)
   ~?  !accepted.sign-arvo  [dap.bowl %eyre-bind-failed binding.sign-arvo]
@@ -371,7 +453,30 @@
     ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
     =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~ 0])
     `this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
-  ?.  ?=([?(%ping %pal %ally %install %hi) *] wire)  (on-agent:def wire sign)
+  ::  azimuth: one diff per fact; the first fact is the whole state
+  ::
+  ?:  ?=([%azimuth ~] wire)
+    ?+  -.sign  `this
+        %kick  :_(this [%pass /azimuth %agent [our.bowl %azimuth] %watch /event]~)
+        %watch-ack
+      ~?  ?=(^ p.sign)  [dap.bowl %azimuth-watch-failed]
+      `this
+    ::
+        %fact
+      ?.  =(%naive-diffs p.cage.sign)  `this
+      =/  d  ((soft point-diff) q.q.cage.sign)
+      ?~  d  `this
+      =/  e  (to-event:hc u.d)
+      ?~  e  `this
+      =/  ev=event  [now.bowl ship.u.d u.e]
+      :_  %=  this
+            events  (scag max-events `(list event)`[ev events])
+            dirty   |(dirty ?=(%sponsor -.u.e))
+          ==
+      ?.  (~(has in watch) ship.u.d)  ~
+      (notify:hc ship.u.d (describe:hc u.e))
+    ==
+  ?.  ?=([?(%ping %pal %ally %install %hi %hark) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
   ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
   `this
@@ -594,6 +699,24 @@
     =/  who  (slaw %p i.t.site)
     ?~  who  ~
     `(trace-json u.who)
+  ::  /api/events: azimuth events, newest first
+  ::
+      [%events ~]
+    `events-json
+  ::  /api/watch: the ships we watch, with status
+  ::
+      [%watch ~]
+    =/  pos  points:nas
+    :-  ~
+    :-  %a
+    %+  turn  (sort ~(tap in watch) lth)
+    |=(k=@p (ship-json k (get-point pos k) ctx))
+  ::  /api/owner/0x...: every point this address owns or is a proxy for
+  ::
+      [%owner @ ~]
+    =/  a  (rush i.t.site ;~(pfix (jest '0x') hex))
+    ?~  a  ~
+    `(owner-json u.a ctx)
   ::  /api/catalog: every published app our ship knows of
   ::
       [%catalog ~]
@@ -932,7 +1055,8 @@
   =/  nm=json  s+(scot %p who)
   ?~  up
     a+~[nm (numb st) ?~(pin n+'-1' life) (numb rel) (numb ns) (numb np)]
-  a+~[nm (numb g.u.up) (numb (index who)) (numb st) ?~(pin n+'-1' life) (numb rel) (numb n.u.up)]
+  =/  esc=json  ?~(pin ~ ?~(escape.net.u.pin ~ s+(scot %p u.escape.net.u.pin)))
+  a+~[nm (numb g.u.up) (numb (index who)) (numb st) ?~(pin n+'-1' life) (numb rel) (numb n.u.up) esc]
 ::
 ::  +index: slot number within the parent (byte/halfword/word above it)
 ::
@@ -966,6 +1090,7 @@
       escape+?~(pin ~ ?~(escape.net.u.pin ~ s+(scot %p u.escape.net.u.pin)))
       target+?~(pals.ctx ~ b+(~(has in targets.u.pals.ctx) who))
       leech+?~(pals.ctx ~ b+(~(has in leeches.u.pals.ctx) who))
+      watched+b+(~(has in watch) who)
   ==
 ::
 ++  detail-json
@@ -1024,8 +1149,8 @@
 ::  +sync-installs: stamp new installs and retract removed ones, as hits
 ::
 ++  sync-installs
-  |=  st=state-5
-  ^-  (quip card state-5)
+  |=  st=state-6
+  ^-  (quip card state-6)
   =/  now-have  my-installs
   =|  cards=(list card)
   =/  new  (skip ~(tap by now-have) |=([k=[ship desk] *] (~(has by mine.st) k)))
@@ -1111,6 +1236,112 @@
       image+?:(=('' image.c) ~ s+image.c)
       version+s+version.c
   ==
+::
+::  +to-event: the azimuth changes worth telling people about
+::
+++  to-event
+  |=  d=point-diff
+  ^-  (unit ev)
+  ?+  +>-.d  ~
+    %rift      `[%breach rift.d]
+    %keys      `[%keys life.keys.d]
+    %sponsor   `[%sponsor sponsor.d]
+    %escape    `[%escape to.d]
+    %owner     `[%owner address.d]
+    %dominion  ?.(?=(%l2 dominion.d) ~ `[%layer2 ~])
+  ==
+::
+++  describe
+  |=  e=ev
+  ^-  @t
+  ?-  -.e
+    %breach   (crip "breached (rift {(scow %ud rift.e)})")
+    %keys     ?:(=(1 life.e) 'booted for the first time' (crip "changed its keys (life {(scow %ud life.e)})"))
+    %sponsor  ?~(to.e 'lost its sponsor' (crip "is now sponsored by {(scow %p u.to.e)}"))
+    %escape   ?~(to.e 'cancelled its escape' (crip "asked to escape to {(scow %p u.to.e)}"))
+    %owner    'was transferred'
+    %layer2   'moved to layer 2'
+  ==
+::
+::  +notify: a Landscape notification about .who (if %hark is running)
+::
+++  notify
+  |=  [who=ship msg=@t]
+  ^-  (list card)
+  ?.  (running %hark)  ~
+  =/  act=hark-action-1
+    :*  %new-yarn  &  &
+        [~ ~ q.byk.bowl /watch/(scot %p who)]
+        ~[[%ship who] ' ' msg]
+        /apps/sextant
+        ~
+    ==
+  [%pass /hark %agent [our.bowl %hark] %poke %hark-action-1 !>(act)]~
+::
+::  +due-watch: a watched ship gets probed every +recheck, no backoff
+::
+++  due-watch
+  |=  who=ship
+  ^-  ?
+  =/  p  (~(get by probes) who)
+  ?~  p  &
+  ?:  (in-flight p)  |
+  (lth sent.u.p (sub now.bowl recheck))
+::
+++  events-json
+  ^-  json
+  :-  %a
+  %+  turn  events
+  |=  e=event
+  =,  enjs:format
+  %-  pairs
+  :~  at+(time at.e)
+      ship+s+(scot %p who.e)
+      kind+s+(kind who.e)
+      what+s+-.what.e
+      text+s+(describe what.e)
+    ::
+      :-  %to
+      ?+  -.what.e  ~
+        %sponsor  ?~(to.what.e ~ s+(scot %p u.to.what.e))
+        %escape   ?~(to.what.e ~ s+(scot %p u.to.what.e))
+        %owner    (addr to.what.e)
+      ==
+  ==
+::
+::  +owner-json: points where .a is the owner or any proxy
+::
+++  owner-json
+  |=  [a=address =ctx]
+  ^-  json
+  =/  hits=(list [ship point])
+    %+  skim  ~(tap in `(set [ship point])`points:nas)
+    |=  [k=ship p=point]
+    =*  o  own.p
+    ?|  =(a address.owner.o)
+        =(a address.management-proxy.o)
+        =(a address.spawn-proxy.o)
+        =(a address.voting-proxy.o)
+        =(a address.transfer-proxy.o)
+    ==
+  :-  %a
+  %+  turn  (sort hits |=([[a=@p *] [b=@p *]] (lth a b)))
+  |=  [k=ship p=point]
+  =/  base  (ship-json k `p ctx)
+  ?>  ?=(%o -.base)
+  =*  o  own.p
+  :-  %o
+  %+  ~(put by p.base)  'roles'
+  :-  %a
+  %+  murn
+    ^-  (list [@tas @ux])
+    :~  [%owner address.owner.o]
+        [%management address.management-proxy.o]
+        [%spawn address.spawn-proxy.o]
+        [%voting address.voting-proxy.o]
+        [%transfer address.transfer-proxy.o]
+    ==
+  |=([r=@tas x=@ux] ?.(=(a x) ~ `s+r))
 ::
 ::  +saxo: hierarchical chain up to the galaxy (no jael needed)
 ::
