@@ -183,7 +183,7 @@ function buildTree(raw, at = Date.now()) {
 let showCold = false;
 try { showCold = localStorage.getItem('sextant-show-cold') === '1'; } catch {}
 function layoutNode(node) {
-  const all = [...(node.allStars || []), ...(node.allPlanets || [])];
+  const all = [...(node.allStars || []), ...(node.allPlanets || []), ...(node.allMoons || [])];
   const vis = showCold ? all : all.filter((k) => k.life !== 0);
   for (const k of all) k.hidden = true;
   for (const k of vis) k.hidden = false;
@@ -194,8 +194,9 @@ function layoutNode(node) {
 // can this host open to show children (loaded or not yet)?
 function openable(n) {
   if (!n) return false;
-  if (n.kind === 'galaxy') return n.kids.length > 0 || (n.np > 0 && !n.loaded);
+  if (n.kind === 'galaxy') return n.kids.length > 0 || (n.np > 0 && !n.loaded) || !!n.allMoons?.length;
   if (n.kind === 'star') return n.loaded ? n.kids.length > 0 : n.n > 0;
+  if (n.kind === 'planet') return n.kids.length > 0;
   return false;
 }
 
@@ -213,10 +214,30 @@ function placeKids(node, kids, from, total, [q, r0]) {
 }
 // ships our ship has talked to (ames peers), and the hosts they live under
 let PEERS = new Map(), PEER_HOSTS = new Set();
+// moons aren't on azimuth: we chart the ones our ship has talked to (which
+// includes our own, since moons ping their planet), around their planet
+let MOONS = new Map(); // planet -> [moon json]
+function attachMoons(p) {
+  const ms = MOONS.get(p.ship);
+  if (!ms || p.allMoons?.length) return false;
+  p.allMoons = ms.slice().sort((a, b) => a.idx - b.idx).map((m) => {
+    const n = { ...m, parentNode: p, kids: [], allStars: [], allPlanets: [] };
+    remember(n, 0); prep(n); T.byName.set(n.ship, n);
+    return n;
+  });
+  // a planet has nothing else to load; stars and galaxies still load planets
+  if (p.kind === 'planet') p.loaded = true;
+  return true;
+}
 async function loadPeers() {
   try {
     const ps = await cget('/peers', 60000);
     PEERS = new Map(ps.map((p) => [p.ship, p]));
+    MOONS = new Map();
+    for (const p of ps) if (p.kind === 'moon' && p.parent) MOONS.set(p.parent, [...(MOONS.get(p.parent) || []), p]);
+    let moved = false;
+    for (const planet of MOONS.keys()) { const n = T?.byName.get(planet); if (n && attachMoons(n)) { layoutNode(n); moved = true; } }
+    if (moved) { sky.dirty = true; kick(); }
     PEER_HOSTS = new Set();
     for (const p of ps) {
       for (let h = p.sponsor; h && h !== p.ship; ) {
@@ -257,7 +278,7 @@ async function ensureKids(node) {
     const r = await cget('/residents/' + node.ship, 300000);
     const ps = r.residents.filter((s) => s.kind === 'planet').sort((a, b) => a.idx - b.idx);
     const at = cache.get('/residents/' + node.ship)?.t ?? Date.now();
-    for (const p of ps) { p.parentNode = node; p.kids = []; remember(p, at); prep(p); T.byName.set(p.ship, p); }
+    for (const p of ps) { p.parentNode = node; p.kids = []; p.allStars = []; p.allPlanets = []; remember(p, at); prep(p); T.byName.set(p.ship, p); attachMoons(p); }
     node.allPlanets = ps;
     node.loaded = true;
     layoutNode(node);
@@ -285,9 +306,12 @@ const ZMAX = 40000;
 // drawn size of a ship from the size of its disc on screen: a fixed-size dot
 // while its disc is small, then a hub that grows with it once it opens
 function dotPx(n, discPx) {
-  if (n.kind === 'galaxy') return Math.min(34, Math.max(Math.min(discPx * 0.4, 6.5), discPx * 0.16));
-  if (n.kind === 'star') return Math.min(22, Math.max(1, Math.min(discPx * 0.42, 4.5), discPx * 0.15));
-  return Math.min(11, Math.max(1.4, discPx * 0.42));
+  if (n.kind === 'galaxy') return Math.min(46, Math.max(Math.min(discPx * 0.4, 6.5), discPx * 0.2));
+  if (n.kind === 'star') return Math.min(34, Math.max(1.2, Math.min(discPx * 0.45, 5), discPx * 0.2));
+  if (n.kind === 'moon') return Math.min(12, Math.max(1.6, discPx * 0.5));
+  // a planet with moons is a hub: keep it smaller so its moons show
+  if (n.kids?.length) return Math.min(22, Math.max(1.8, Math.min(discPx * 0.5, 7), discPx * 0.22));
+  return Math.min(20, Math.max(1.8, discPx * 0.5));
 }
 const OPEN = 18; // a disc opens once it is this many px in radius
 
@@ -385,7 +409,7 @@ function drawContainer(c, node, sx, sy, Rpx, later) {
   for (const kid of node.kids) {
     const [x, y] = toScreen(kid.x, kid.y), kr = kid.R * k;
     if (!onScreen(x, y, kr)) continue;
-    if (kid.kind === 'star' && kr > OPEN && openable(kid)) drawContainer(c, kid, x, y, kr, later);
+    if (kid.kind !== 'galaxy' && kr > OPEN && openable(kid)) drawContainer(c, kid, x, y, kr, later);
     later.push([kid, x, y, dotPx(kid, kr), a]);
   }
 }
@@ -618,7 +642,7 @@ function stepFly(now) {
 const fitZ = (R) => (Math.min(sky.w, sky.h) * 0.42) / (R * unit());
 function flyToNode(n, instant) {
   if (!n) return flyTo(0, 0, 1, instant);
-  if (n.kind === 'planet') return flyTo(n.x, n.y, fitZ(n.R * 7), instant);
+  if (n.kind === 'planet' || n.kind === 'moon') return flyTo(n.x, n.y, fitZ(n.R * 7), instant);
   flyTo(n.x, n.y, fitZ(n.R), instant);
 }
 
