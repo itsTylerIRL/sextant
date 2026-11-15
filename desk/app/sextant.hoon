@@ -518,6 +518,10 @@
     =/  who  (slaw %p i.t.site)
     ?~  who  ~
     `(trace-json u.who)
+  ::  /api/catalog: every published app our ship knows of
+  ::
+      [%catalog ~]
+    `catalog-json
   ::  /api/apps/~sampel: what this ship publishes, as %treaty knows it
   ::
       [%apps @ ~]
@@ -780,22 +784,49 @@
   :~  treaty+b+&
       allied+b+?=(^ ali)
       desks+a+?~(ali ~ (turn ~(tap in u.ali) |=([s=@p d=@tas] s+d)))
-      :-  %apps
+      apps+a+(turn ts |=([[s=@p d=@tas] t=treaty] (app-json s d t have)))
+  ==
+::
+::  +app-json: one published app, as its docket describes it
+::
+++  app-json
+  |=  [s=@p d=@tas t=treaty have=(set @tas)]
+  ^-  json
+  =,  enjs:format
+  =/  k  docket.t
+  %-  pairs
+  :~  ship+s+(scot %p s)
+      desk+s+d
+      title+s+title.k
+      info+s+info.k
+      color+s+(crip ((x-co:co 6) color.k))
+      image+?~(image.k ~ s+u.image.k)
+      version+s+(crip "{(scow %ud major.version.k)}.{(scow %ud minor.version.k)}.{(scow %ud patch.version.k)}")
+      website+s+website.k
+      license+s+license.k
+      installed+b+(~(has in have) d)
+  ==
+::
+::  +catalog-json: every app our ship knows is published anywhere, and
+::  the publishers we follow (allies) with how many desks each lists
+::
+++  catalog-json
+  ^-  json
+  =,  enjs:format
+  ?.  (running %treaty)  (pairs ~[treaty+b+|])
+  =/  al  .^(ally-update %gx (bp %treaty /allies/ally-update-0))
+  =/  als=(list [@p (set [@p @tas])])  ?.(?=(%ini -.al) ~ ~(tap by init.al))
+  =/  tu  .^(treaty-update %gx (bp %treaty /treaties/treaty-update-0))
+  =/  ts=(list [[@p @tas] treaty])  ?.(?=(%ini -.tu) ~ ~(tap by init.tu))
+  =/  have  .^((set @tas) %cd (bp %$ ~))
+  %-  pairs
+  :~  treaty+b+&
+      :-  %allies
       :-  %a
-      %+  turn  ts
-      |=  [[s=@p d=@tas] t=treaty]
-      =/  k  docket.t
-      %-  pairs
-      :~  desk+s+d
-          title+s+title.k
-          info+s+info.k
-          color+s+(crip ((x-co:co 6) color.k))
-          image+?~(image.k ~ s+u.image.k)
-          version+s+(crip "{(scow %ud major.version.k)}.{(scow %ud minor.version.k)}.{(scow %ud patch.version.k)}")
-          website+s+website.k
-          license+s+license.k
-          installed+b+(~(has in have) d)
-      ==
+      %+  turn  als
+      |=  [s=@p ds=(set [@p @tas])]
+      (pairs ~[ship+s+(scot %p s) desks+(numb ~(wyt in ds))])
+      apps+a+(turn ts |=([[s=@p d=@tas] t=treaty] (app-json s d t have)))
   ==
 ::
 ::  +tiny: compact row for /api/tree

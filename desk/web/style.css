@@ -272,3 +272,27 @@ b.on { color: var(--live); font-weight: 600; }
 .trace .verdict { margin: 8px 0 0; line-height: 1.4; }
 .trace b.off { color: var(--dead); font-weight: 600; }
 .trace button { margin-top: 8px; font-size: 12px; padding: 5px 11px; }
+
+/* ---- apps directory ---- */
+.appdir .lhead { flex-wrap: wrap; gap: 10px; }
+.allyform { display: flex; gap: 6px; }
+.allyform input { width: 230px; max-width: 60vw; font: 12px var(--mono); }
+.allyform button { font-size: 12px; padding: 5px 11px; margin: 0; }
+.appfilters { display: flex; gap: 12px; align-items: center; margin: 12px 0 8px; flex-wrap: wrap; }
+.appfilters input[type=search] { flex: 1; min-width: 180px; }
+.appfilters label { display: flex; gap: 5px; align-items: center; font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.chips button { font: 11px var(--mono); padding: 3px 8px; margin: 0; }
+.chips button span { color: var(--muted); margin-left: 3px; }
+.chips button.on { border-color: var(--accent); color: var(--accent); }
+.appnote:empty { display: none; }
+.appnote { font-size: 12px; margin-bottom: 8px; }
+.appgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
+.appgrid .empty { grid-column: 1 / -1; }
+.app .apptitle a { color: inherit; }
+
+.appdir .appfilters, .appdir .chips, .appdir .appnote, .appdir .appgrid { margin-left: 14px; margin-right: 14px; }
+.appdir .appgrid { margin-bottom: 14px; }
+.appdir input[type=search], .allyform input { background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; font: 12px var(--mono); }
+.appdir input[type=search]:focus, .allyform input:focus { outline: 1px solid var(--accent); }

@@ -886,29 +886,35 @@ async function loadApps(ship, until = 0) {
   }
   const got = new Set(r.apps.map((a) => a.desk));
   const pending = r.desks.filter((d) => !got.has(d));
-  const cards = r.apps.sort((a, b) => a.title.localeCompare(b.title)).map((a) => {
-    const icon = okUrl(a.image)
-      ? `<img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="background:${okHex(a.color)}">`
-      : `<span class="appicon" style="background:${okHex(a.color)}">${esc((a.title || a.desk).slice(0, 1).toUpperCase())}</span>`;
-    return `<div class="app">${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}</span></div>
-      ${a.info ? `<div class="appinfo">${esc(a.info)}</div>` : ''}</div>
-      ${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div>`;
-  }).join('');
+  const cards = r.apps.sort((a, b) => a.title.localeCompare(b.title)).map((a) => appCard(a)).join('');
   const status = pending.length && (waiting || r.apps.length)
     ? `<div class="muted appsnote">${waiting ? 'loading' : 'waiting on'} ${pending.length} more: ${pending.map((d) => '%' + esc(d)).join(' ')}</div>`
     : !r.desks.length ? `<div class="muted appsnote">${waiting ? `asking ${esc(ship)}…` : 'Publishes no apps, or hasn\'t answered yet.'}</div>` : '';
   el.innerHTML = cards + status;
-  el.querySelectorAll('.appinstall').forEach((b) => (b.onclick = () => installApp(ship, b)));
-  // icons that fail to load fall back to a lettered tile
+  wireApps(el, ship);
+  if (waiting && (pending.length || !r.desks.length)) appsPoll = setTimeout(() => loadApps(ship, until), 3000);
+}
+
+// one app card; .withShip adds the publisher (for the network-wide list)
+function appCard(a, withShip = false) {
+  const icon = okUrl(a.image)
+    ? `<img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="background:${okHex(a.color)}">`
+    : `<span class="appicon" style="background:${okHex(a.color)}">${esc((a.title || a.desk).slice(0, 1).toUpperCase())}</span>`;
+  const by = withShip ? ` · <a href="#/${esc(a.ship)}" title="show ${esc(a.ship)} on the map">${esc(a.ship)}</a>` : '';
+  return `<div class="app">${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}${by}</span></div>
+    ${a.info ? `<div class="appinfo">${esc(a.info)}</div>` : ''}</div>
+    ${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-ship="${esc(a.ship || '')}" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div>`;
+}
+// install buttons, and icons that fail to load fall back to a lettered tile
+function wireApps(el, ship) {
+  el.querySelectorAll('.appinstall').forEach((b) => (b.onclick = () => installApp(ship || b.dataset.ship, b)));
   el.querySelectorAll('.app img').forEach((im) => (im.onerror = () => {
     const t = document.createElement('span');
     t.className = 'appicon'; t.style.background = im.style.background;
     t.textContent = (im.closest('.app').querySelector('.apptitle b')?.textContent || '?').slice(0, 1).toUpperCase();
     im.replaceWith(t);
   }));
-  if (waiting && (pending.length || !r.desks.length)) appsPoll = setTimeout(() => loadApps(ship, until), 3000);
 }
-
 async function installApp(ship, b) {
   const desk = b.dataset.desk;
   if (!confirm(`Install "${b.dataset.title}" (%${desk}) from ${ship}?\n\nApps run on your ship with full access to it. Only install from publishers you trust.`)) return;
@@ -1324,6 +1330,7 @@ async function route() {
     }
     if (h === 'pals') return await pals();
     if (h === 'peers') return await peers();
+    if (h === 'apps') return await appsView();
     setTab('net'); mapMode(true);
     await ensureTree();
     const instant = firstRoute; firstRoute = false;
@@ -1362,6 +1369,86 @@ async function peers() {
   ps.sort((a, b) => (b.status === 'live') - (a.status === 'live') || (b.last || 0) - (a.last || 0));
   $('view').innerHTML = '<section class="card" id="p"></section>';
   list($('p'), 'Peers', ps, 'No peers yet.');
+}
+
+// ---------------------------------------------------------------- apps
+//
+// Every app our ship knows is published anywhere, via %treaty: from the
+// publishers it follows (allies), including any added here.
+
+const appsUi = { q: '', by: null, hideHave: false, poll: 0 };
+async function appsView() {
+  setTab('apps'); mapMode(false); crumbs.innerHTML = '<b>apps on the network</b><span class="muted crumbnote">as %treaty knows them</span>';
+  clearTimeout(appsUi.poll);
+  let c;
+  try { c = await get('/catalog'); } catch (e) { $('view').innerHTML = `<section class="card err">${esc(e.message)}</section>`; return; }
+  if (location.hash !== '#/apps') return;
+  if (!c.treaty) { $('view').innerHTML = '<section class="card empty">%treaty isn\'t running on this ship (it comes with %landscape).</section>'; return; }
+  const fresh = !$('appq');
+  if (fresh) {
+    $('view').innerHTML = `<section class="card appdir">
+      <div class="lhead">
+        <div class="ltitle"><h2>Apps</h2><span class="count" id="appn"></span></div>
+        <form id="allyform" class="allyform" autocomplete="off">
+          <input id="allyq" placeholder="add a publisher: ~sampel-palnet" spellcheck="false" aria-label="Publisher to add">
+          <button>Add</button>
+        </form>
+      </div>
+      <div class="appfilters">
+        <input id="appq" type="search" placeholder="search apps" spellcheck="false" aria-label="Search apps">
+        <label class="muted"><input type="checkbox" id="apphave"> hide installed</label>
+      </div>
+      <div class="chips" id="appby"></div>
+      <div class="appnote muted" id="appnote"></div>
+      <div class="appgrid" id="appgrid"></div>
+    </section>`;
+    $('appq').oninput = (e) => { appsUi.q = e.target.value.toLowerCase(); drawApps(c); };
+    $('apphave').onchange = (e) => { appsUi.hideHave = e.target.checked; drawApps(c); };
+    $('allyform').onsubmit = (e) => { e.preventDefault(); addPublisher(normalize($('allyq').value)); };
+  }
+  $('apphave').checked = appsUi.hideHave; $('appq').value = appsUi.q;
+  appsUi.cat = c;
+  drawApps(c);
+}
+function drawApps(c) {
+  const apps = c.apps.slice().sort((a, b) => (a.title || a.desk).localeCompare(b.title || b.desk));
+  const pubs = new Map();
+  for (const a of apps) pubs.set(a.ship, (pubs.get(a.ship) || 0) + 1);
+  for (const al of c.allies) if (!pubs.has(al.ship)) pubs.set(al.ship, 0);
+  if (appsUi.by && !pubs.has(appsUi.by)) appsUi.by = null;
+  $('appby').innerHTML = [`<button data-by="" class="${appsUi.by ? '' : 'on'}">all <span>${apps.length}</span></button>`,
+    ...[...pubs].sort((a, b) => b[1] - a[1]).map(([s, n]) => `<button data-by="${esc(s)}" class="${appsUi.by === s ? 'on' : ''}">${esc(s)} <span>${n}</span></button>`)].join('');
+  $('appby').querySelectorAll('[data-by]').forEach((b) => (b.onclick = () => { appsUi.by = b.dataset.by || null; drawApps(c); }));
+  const q = appsUi.q;
+  const shown = apps.filter((a) => (!appsUi.by || a.ship === appsUi.by) && (!appsUi.hideHave || !a.installed)
+    && (!q || [a.title, a.desk, a.info, a.ship].some((x) => (x || '').toLowerCase().includes(q))));
+  $('appn').textContent = `${shown.length} of ${apps.length} · ${pubs.size} publishers`;
+  const el = $('appgrid');
+  el.innerHTML = shown.length ? shown.map((a) => appCard(a, true)).join('') : `<div class="empty">${apps.length ? 'No apps match.' : 'No apps yet. Add a publisher above to see what it offers.'}</div>`;
+  wireApps(el);
+}
+// follow a publisher through %treaty, then wait for its apps to arrive
+async function addPublisher(ship) {
+  const note = $('appnote');
+  if (!ship) { note.textContent = 'enter a ship name, like ~paldev'; return; }
+  note.textContent = `asking ${ship} for its apps…`;
+  const r = await fetch(`${API}/apps/${ship}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+  if (!r || !r.ok) { note.textContent = r && r.status === 403 ? 'log in to add publishers' : 'failed'; return; }
+  $('allyq').value = '';
+  const until = Date.now() + 60000;
+  const tick = async () => {
+    if (location.hash !== '#/apps') return;
+    try {
+      const c = await get('/catalog');
+      appsUi.cat = c;
+      const n = c.apps.filter((a) => a.ship === ship).length;
+      if (n) { appsUi.by = ship; note.textContent = `${ship} publishes ${n} app${n === 1 ? '' : 's'}`; drawApps(c); return; }
+      drawApps(c);
+    } catch {}
+    if (Date.now() < until) appsUi.poll = setTimeout(tick, 3000);
+    else note.textContent = `${ship} hasn't answered. It may be offline, or publish nothing.`;
+  };
+  tick();
 }
 
 function normalize(q) {
