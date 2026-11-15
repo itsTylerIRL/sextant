@@ -24,7 +24,7 @@
 /-  vitals, docket
 /+  default-agent, dbug, server
 |%
-+$  versioned-state  $%(state-0 state-1 state-2 state-3)
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4)
 +$  state-0  [%0 public=?]
 ::  tree: cached /api/tree body, rebuilt by a behn timer; not persisted
 ::  next: when that timer fires, so a reload can cancel it
@@ -50,14 +50,35 @@
       public=?
       next=(unit @da)
       tree=(unit octs)
+      probes=(map ship probe-3)
+      dirty=?
+  ==
++$  probe-3  [sent=@da got=@da ok=(unit ?)]
+::  miss: probes in a row that went unanswered, for backing off
+::
++$  state-4
+  $:  %4
+      public=?
+      next=(unit @da)
+      tree=(unit octs)
       probes=(map ship probe)
       dirty=?
   ==
-+$  probe  [sent=@da got=@da ok=(unit ?)]
++$  probe  [sent=@da got=@da ok=(unit ?) miss=@ud]
 ::
-++  patience  ~s45  ::  probe unanswered this long: offline
+++  patience  ~s20  ::  probe unanswered this long: offline
 ++  recheck   ~m5   ::  don't re-probe a ship that answered this recently
-++  redead    ~m15  ::  don't re-probe a silent ship sooner
+++  max-out   50    ::  probes in flight at once; the rest wait their turn
+::  +backoff: how long to leave a ship that has missed .miss probes in a
+::  row.  most silent ships are abandoned and stay that way.
+::
+++  backoff
+  |=  miss=@ud
+  ^-  @dr
+  ?:  (lte miss 1)  ~m15
+  ?:  =(2 miss)  ~h1
+  ?:  =(3 miss)  ~h6
+  ~d1
 ::  +probe-path: the hash of their %kids desk as of a minute before .at.
 ::  %kids is public on every ship (%base isn't), and dating the case
 ::  makes each probe a new request: a cancelled request leaves an inert
@@ -124,7 +145,7 @@
 --
 ::
 %-  agent:dbug
-=|  state-3
+=|  state-4
 =*  state  -
 ^-  agent:gall
 =<
@@ -145,12 +166,16 @@
   |=  old-vase=vase
   ^-  (quip card _this)
   =/  old  !<(versioned-state old-vase)
-  =/  new=state-3
+  =/  new=state-4
     ?-  -.old
-      %0  [%3 public.old ~ ~ ~ |]
-      %1  [%3 public.old next.old ~ ~ |]
-      %2  [%3 public.old next.old ~ (~(run by probes.old) probe-2-to-3:hc) |]
-      %3  old(tree ~)
+      %0  [%4 public.old ~ ~ ~ |]
+      %1  [%4 public.old next.old ~ ~ |]
+      %2  :*  %4  public.old  next.old  ~
+              (~(run by probes.old) |=(p=probe-2 (probe-3-to-4:hc (probe-2-to-3:hc p))))
+              |
+          ==
+      %3  [%4 public.old next.old ~ (~(run by probes.old) probe-3-to-4:hc) |]
+      %4  old(tree ~)
     ==
   ::  replace any pending timer with one that rebuilds the cache now
   ::
@@ -190,7 +215,7 @@
       :_  this
       %+  weld  cards
       %+  give-simple-payload:app:server  eyre-id
-      (json-response:gen:server (statuses:hc who))
+      (json-response:gen:server (statuses:hc who authenticated.req))
     ::  /api/tree is expensive: serve the cached body when we have one
     ::
     ?:  ?&  ?=(^ tree)
@@ -227,8 +252,8 @@
   ?:  ?=([%probe @ *] wire)
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=([%ames %sage *] sign-arvo))  `this
-    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~])
-    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&)), dirty &)
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~ 0])
+    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
   ::  a probe's time is up: cancel it if it's still out
   ::
   ?:  ?=([%yawn @ @ ~] wire)
@@ -237,7 +262,7 @@
     ?.  &(?=(^ who) ?=(^ at))  `this
     =/  p  (~(get by probes) u.who)
     ?.  &(?=(^ p) =(sent.u.p u.at) (lth got.u.p sent.u.p))  `this
-    :_  this(probes (~(put by probes) u.who u.p(ok `|)), dirty &)
+    :_  this(probes (~(put by probes) u.who u.p(ok `|, miss +(miss.u.p))), dirty &)
     [%pass /probe/(scot %p u.who)/(scot %da u.at) %arvo %a %yawn u.who (probe-path u.at)]~
   ?.  ?=([%eyre %connect ~] wire)  (on-arvo:def wire sign-arvo)
   ?>  ?=([%eyre %bound *] sign-arvo)
@@ -252,8 +277,8 @@
     ::
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
-    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~])
-    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&)), dirty &)
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~ 0])
+    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&, miss 0)), dirty &)
   ?.  ?=([?(%ping %pal %ally %install) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
   ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
@@ -589,31 +614,40 @@
   ?:  =(who our.bowl)  |
   ?~  p  &
   ?:  (gte got.u.p sent.u.p)  (lth got.u.p (sub now.bowl recheck))
-  (lth sent.u.p (sub now.bowl redead))
+  (lth sent.u.p (sub now.bowl (backoff miss.u.p)))
+::
+++  probe-3-to-4
+  |=  p=probe-3
+  ^-  probe
+  [sent.p got.p ok.p ?:(=(`| ok.p) 1 0)]
 ::
 ++  probe-2-to-3
   |=  p=probe-2
-  ^-  probe
+  ^-  probe-3
   :+  sent.p  got.p
   ?:  (gte got.p sent.p)  ?:(=(*@da got.p) ~ `&)
   `|
 ::
-::  +send-probes: scry each ship that needs it, with a deadline
+::  +send-probes: scry each ship that needs it, with a deadline, keeping
+::  at most +max-out in flight; the rest go out on later calls
 ::
 ++  send-probes
   |=  who=(list ship)
   ^-  (quip card (map ship probe))
   =/  ps  probes
+  =/  out=@ud  (lent (skim ~(val by ps) |=(p=probe (in-flight `p))))
   =|  cards=(list card)
   |-
   ?~  who  [cards ps]
+  ?:  (gte out max-out)  [cards ps]
   =*  w  i.who
   =/  p  (~(get by ps) w)
   ?.  (want-probe w p)  $(who t.who)
   =/  wir  /(scot %p w)/(scot %da now.bowl)
   %=  $
     who    t.who
-    ps     (~(put by ps) w [now.bowl ?~(p *@da got.u.p) ?~(p ~ ok.u.p)])
+    out    +(out)
+    ps     (~(put by ps) w ?~(p [now.bowl *@da ~ 0] u.p(sent now.bowl)))
     cards
       :*  [%pass [%probe wir] %arvo %a %keen ~ w (probe-path now.bowl)]
           [%pass /yawn/(scot %p w)/(scot %da now.bowl) %arvo %b %wait (add now.bowl patience)]
@@ -648,10 +682,11 @@
   ?~  l  ~
   (scag 1.000 ~(tap in (silt (murn u.l (cury slaw %p)))))
 ::
-::  +statuses: {"~zod": [status, last, probing], ...}
+::  +statuses: {"~zod": [status, last, waiting], ...}.  waiting: a probe
+::  is out, or (for the owner, whose reads send them) one is queued
 ::
 ++  statuses
-  |=  who=(list ship)
+  |=  [who=(list ship) owner=?]
   ^-  json
   =/  =ctx  get-ctx
   :-  %o
@@ -665,7 +700,7 @@
   :-  %a
   :~  ?~(q ~ s+kind.u.q)
       ?~(q ~ ?:(=(*@da last.u.q) ~ (time:enjs:format last.u.q)))
-      b+(in-flight p)
+      b+|((in-flight p) &(owner (want-probe w p)))
   ==
 ::
 ::  json

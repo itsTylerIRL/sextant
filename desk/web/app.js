@@ -932,7 +932,8 @@ async function palAction(d, node, add) {
 // stale (a ship last heard two weeks ago reads "dead" forever). While the
 // map is open we keep sending the booted ships on screen, plus the selected
 // one, to /api/status. For the owner the agent probes any it hasn't heard
-// from in five minutes (a remote scry it cancels after 45s) and the next
+// from in five minutes (a remote scry it cancels after 20s; silent ships
+// back off up to a day, and at most 50 are out at once) and the next
 // reads pick up the answers. While answers are pending a radar sweep turns
 // over the galaxy or star in view, and each result lands with a blip.
 
@@ -946,7 +947,7 @@ function scanHud() {
   if (!btn) return;
   btn.textContent = auto.on ? 'Live status: on' : 'Live status: off';
   btn.title = auto.on
-    ? 'Ships on screen are checked automatically: one small remote-scry request each, at most every 5 minutes, cancelled after 45 seconds if unanswered. Click to pause.'
+    ? 'Ships on screen are checked automatically: one small remote-scry request each, at most every 5 minutes (silent ships back off to once a day), cancelled after 20 seconds if unanswered. Click to pause.'
     : 'Paused: statuses are whatever your ship last heard. Click to check ships on screen automatically.';
   const where = sky.ctx ? sky.ctx.ship : 'network';
   res.innerHTML = auto.on && auto.n
