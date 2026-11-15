@@ -152,7 +152,7 @@ function armLayout(N, q, r0) {
 const ST = [null, 'live', 'dead', 'unborn', 'stale'];
 let T = null; // { gals, byName, guide }
 
-function buildTree(raw) {
+function buildTree(raw, at = Date.now()) {
   T0 = raw.g; GALAXY_BY_SUFFIX.clear();
   const byName = new Map();
   const gals = raw.g.map((r, i) => ({
@@ -172,7 +172,7 @@ function buildTree(raw) {
     byName.set(g.ship, g);
     for (const s of g.allStars) byName.set(s.ship, s);
   }
-  for (const n of byName.values()) prep(n);
+  for (const n of byName.values()) { remember(n, at); prep(n); }
   for (const g of gals) layoutNode(g);
   return { gals, byName, guide: G.pos };
 }
@@ -231,6 +231,13 @@ async function loadPeers() {
   } catch {}
 }
 
+// statuses this page has read from /api/status, so rebuilding the tree or
+// reloading a star's planets never blanks a ship we already know about
+const seen = new Map(); // ship -> { status, last, t }
+function remember(n, since) {
+  const k = seen.get(n.ship);
+  if (k && k.t > since) { n.status = k.status; n.last = k.last; }
+}
 function prep(n) {
   n.c = cls(n); n.pal = isPal(n); n.mine = myChain.has(n.ship);
   n.peer = PEERS.has(n.ship); n.peerHost = PEER_HOSTS.has(n.ship);
@@ -249,7 +256,8 @@ async function ensureKids(node) {
   try {
     const r = await cget('/residents/' + node.ship, 300000);
     const ps = r.residents.filter((s) => s.kind === 'planet').sort((a, b) => a.idx - b.idx);
-    for (const p of ps) { p.parentNode = node; p.kids = []; prep(p); T.byName.set(p.ship, p); }
+    const at = cache.get('/residents/' + node.ship)?.t ?? Date.now();
+    for (const p of ps) { p.parentNode = node; p.kids = []; remember(p, at); prep(p); T.byName.set(p.ship, p); }
     node.allPlanets = ps;
     node.loaded = true;
     layoutNode(node);
@@ -281,7 +289,7 @@ function dotPx(n, discPx) {
   if (n.kind === 'star') return Math.min(22, Math.max(1, Math.min(discPx * 0.42, 4.5), discPx * 0.15));
   return Math.min(11, Math.max(1.4, discPx * 0.42));
 }
-const OPEN = 46; // a disc opens once it is this many px in radius
+const OPEN = 18; // a disc opens once it is this many px in radius
 
 function resize() {
   const r = sky.stage.getBoundingClientRect();
@@ -336,7 +344,7 @@ function drawBase() {
     const [sx, sy] = toScreen(g.x, g.y), Rpx = g.R * k;
     if (!onScreen(sx, sy, Rpx)) continue;
     if (Rpx > OPEN && openable(g)) drawContainer(c, g, sx, sy, Rpx, later);
-    if (Rpx > OPEN * 4 && g.np && !g.loaded) ensureKids(g);
+    if (Rpx > OPEN * 2 && g.np && !g.loaded) ensureKids(g);
     later.push([g, sx, sy, dotPx(g, Rpx), 1]);
   }
   // kids first, hubs on top
@@ -359,17 +367,14 @@ function drawGuide(c, pos, N, cx, cy, scale, alpha) {
 }
 
 function drawContainer(c, node, sx, sy, Rpx, later) {
-  const a = clamp((Rpx - OPEN) / 70, 0, 1);
+  const a = clamp((Rpx - OPEN) / 24, 0, 1);
   const k = pxScale();
-  c.strokeStyle = P.ring; c.lineWidth = 1;
-  c.globalAlpha = 0.6 * a; c.beginPath(); c.arc(sx, sy, Rpx, 0, TAU); c.stroke();
   const L = node.layout;
   if (L && node.slotKids) {
     c.strokeStyle = P.slot; c.lineWidth = 1.2; c.globalAlpha = a;
     c.beginPath();
     if (!L.m) {
-      // a handful of children: one even orbit, with a short spoke to each
-      c.arc(sx, sy, L.ring * Rpx, 0, TAU);
+      // a handful of children: a spoke to each
       for (const s of node.slotKids) if (s) { const [x, y] = toScreen(s.x, s.y); c.moveTo(sx, sy); c.lineTo(x, y); }
     } else {
       // each arm: from the host out through its children in order
@@ -1001,6 +1006,7 @@ async function refreshStatus() {
       if (!v) continue;
       const [st, last, probing] = v;
       const moved = n.status !== st, answered = n.probing && !probing;
+      seen.set(n.ship, { status: st, last, t: Date.now() });
       if (moved || n.last !== last) { n.status = st; n.last = last; prep(n); changed = true; }
       if ((moved || answered) && !reduceMotion) blips.push({ n, t: performance.now() });
       n.probing = probing;

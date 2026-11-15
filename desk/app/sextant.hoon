@@ -8,16 +8,15 @@
 ::      %pals     targets / leeches / mutuals, if installed
 ::      %vitals   active connectivity checks, if landscape is installed
 ::
-::    ames only updates its view of a peer when packets flow, so on its
-::    own it goes stale: a ship we last heard from two weeks ago reads
-::    %dead forever.  we keep it fresh by probing: a remote scry of the
-::    hash of their %kids desk at revision 1 (+probe-path), which ships
-::    serve to anyone (%base is private by default; %kids isn't).  any answer, even an empty one,
-::    means they're up.  unlike a poke, a scry can be cancelled: one
-::    that goes unanswered for +patience is %yawned, so nothing is left
-::    retrying in ames.  this is the same trick the kernel's own
-::    upgrade prober (ted/prob) uses.  see +status for how the evidence
-::    is weighed.
+::    ames's view of a peer can't be trusted for "online": it marks any
+::    idle peer %dead 30s after the last packet, and stamps last-contact
+::    before any contact.  so we probe: a remote scry of the hash of
+::    their %kids desk (+probe-path), which ships serve to anyone (%base
+::    is private by default).  any answer, even an empty one, means
+::    they're up.  unlike a poke, a scry can be cancelled: one that goes
+::    unanswered for +patience is %yawned and nothing keeps retrying.
+::    the kernel's own upgrade prober (ted/prob) uses the same trick.
+::    each ship's last verdict is kept until the next probe finishes.
 ::
 ::    moons are not on azimuth, so we only know the moons our ship has
 ::    talked to (or our own, via jael).
@@ -25,7 +24,7 @@
 /-  vitals, docket
 /+  default-agent, dbug, server
 |%
-+$  versioned-state  $%(state-0 state-1 state-2)
++$  versioned-state  $%(state-0 state-1 state-2 state-3)
 +$  state-0  [%0 public=?]
 ::  tree: cached /api/tree body, rebuilt by a behn timer; not persisted
 ::  next: when that timer fires, so a reload can cancel it
@@ -39,16 +38,35 @@
       public=?
       next=(unit @da)
       tree=(unit octs)
-      probes=(map ship probe)
+      probes=(map ship probe-2)
   ==
-+$  probe  [sent=@da got=@da]
-::  how fresh is fresh
++$  probe-2  [sent=@da got=@da]
+::  ok: the verdict of the last probe that finished, kept while the next
+::  one is out so a re-check never blanks a ship's status
+::  dirty: probes changed since /api/tree was last cached
 ::
-++  fresh     ~m15  ::  heard from this recently: live
++$  state-3
+  $:  %3
+      public=?
+      next=(unit @da)
+      tree=(unit octs)
+      probes=(map ship probe)
+      dirty=?
+  ==
++$  probe  [sent=@da got=@da ok=(unit ?)]
+::
 ++  patience  ~s45  ::  probe unanswered this long: offline
-++  recheck   ~m5   ::  don't probe a ship heard from this recently
-++  redead    ~m15 ::  don't re-probe an unanswering ship sooner
-++  probe-path  /c/z/1/kids
+++  recheck   ~m5   ::  don't re-probe a ship that answered this recently
+++  redead    ~m15  ::  don't re-probe a silent ship sooner
+::  +probe-path: the hash of their %kids desk as of a minute before .at.
+::  %kids is public on every ship (%base isn't), and dating the case
+::  makes each probe a new request: a cancelled request leaves an inert
+::  entry in ames that a repeat of the same path would just join.
+::
+++  probe-path
+  |=  at=@da
+  ^-  path
+  /c/z/(scot %da (sub at (add ~m1 (mod at ~s1))))/kids
 +$  card  card:agent:gall
 ::  mirror of point:naive, so we don't need to vendor lib/naive
 ::
@@ -106,7 +124,7 @@
 --
 ::
 %-  agent:dbug
-=|  state-2
+=|  state-3
 =*  state  -
 ^-  agent:gall
 =<
@@ -127,11 +145,12 @@
   |=  old-vase=vase
   ^-  (quip card _this)
   =/  old  !<(versioned-state old-vase)
-  =/  new=state-2
+  =/  new=state-3
     ?-  -.old
-      %0  [%2 public.old ~ ~ ~]
-      %1  [%2 public.old next.old ~ ~]
-      %2  old(tree ~)
+      %0  [%3 public.old ~ ~ ~ |]
+      %1  [%3 public.old next.old ~ ~ |]
+      %2  [%3 public.old next.old ~ (~(run by probes.old) probe-2-to-3:hc) |]
+      %3  old(tree ~)
     ==
   ::  replace any pending timer with one that rebuilds the cache now
   ::
@@ -195,19 +214,21 @@
   ^-  (quip card _this)
   ?:  ?=([%tree ~] wire)
     ?>  ?=([%behn %wake *] sign-arvo)
-    =/  nex  (add now.bowl ~m5)
+    =/  nex  (add now.bowl ~m1)
     ::  keep our pals and the galaxies fresh without being asked
+    ::  (+want-probe limits how often each one is actually asked)
     ::
     =^  cards  probes  (send-probes:hc auto-targets:hc)
     :-  [[%pass /tree %arvo %b %wait nex] cards]
-    this(next `nex, tree `tree-octs:hc)
+    ?.  |(dirty ?=(~ tree))  this(next `nex)
+    this(next `nex, tree `tree-octs:hc, dirty |)
   ::  a probe answered
   ::
-  ?:  ?=([%probe @ ~] wire)
+  ?:  ?=([%probe @ *] wire)
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=([%ames %sage *] sign-arvo))  `this
-    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da])
-    `this(probes (~(put by probes) u.who p(got now.bowl)))
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~])
+    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&)), dirty &)
   ::  a probe's time is up: cancel it if it's still out
   ::
   ?:  ?=([%yawn @ @ ~] wire)
@@ -216,8 +237,8 @@
     ?.  &(?=(^ who) ?=(^ at))  `this
     =/  p  (~(get by probes) u.who)
     ?.  &(?=(^ p) =(sent.u.p u.at) (lth got.u.p sent.u.p))  `this
-    :_  this
-    [%pass /probe/(scot %p u.who) %arvo %a %yawn u.who probe-path]~
+    :_  this(probes (~(put by probes) u.who u.p(ok `|)), dirty &)
+    [%pass /probe/(scot %p u.who)/(scot %da u.at) %arvo %a %yawn u.who (probe-path u.at)]~
   ?.  ?=([%eyre %connect ~] wire)  (on-arvo:def wire sign-arvo)
   ?>  ?=([%eyre %bound *] sign-arvo)
   ~?  !accepted.sign-arvo  [dap.bowl %eyre-bind-failed binding.sign-arvo]
@@ -231,8 +252,8 @@
     ::
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
-    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da])
-    `this(probes (~(put by probes) u.who p(got now.bowl)))
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da ~])
+    `this(probes (~(put by probes) u.who p(got now.bowl, ok `&)), dirty &)
   ?.  ?=([?(%ping %pal %ally %install) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
   ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
@@ -526,74 +547,75 @@
   ?~  p  c
   ?:((gth last.u.p last.u.c) p c)
 ::
-::  +heard: when they last provably answered one of our probes.  ames's
-::  last-contact can't be trusted for this: it's stamped when keys first
-::  arrive and, under mesa, when we merely send to a ship with a known
-::  lane, so ships that never replied read as recently heard.
+::  +status: from our probes only.  ames's own view can't be trusted:
+::  it marks any idle peer %dead 30s after the last packet, and stamps
+::  last-contact when keys arrive or (under mesa) when we merely send.
 ::
-++  heard
-  |=  [a=(unit qos) p=(unit probe)]
-  ^-  @da
-  ?~(p *@da got.u.p)
+::    %live:    the last finished probe was answered (last: when)
+::    %dead:    the last finished probe went unanswered past +patience
+::              (last: when we last heard from them, if ever)
+::    %unborn:  never probed, and ames has keys but nothing more
 ::
-::  +status: ames plus our probes, weighed by age
-::
-::    %dead:    a probe has gone unanswered past +patience
-::    %live:    they answered within +fresh
-::    %stale:   everything we know is older than that
-::    %unborn:  ames has their keys, nothing more
-::
-::    ames's own %dead is ignored: it marks any idle peer %dead 30s
-::    after the last packet, so it means "quiet", not "offline".
+::    a probe in flight leaves the previous verdict standing.
 ::
 ++  status
   |=  [who=ship =ctx]
   ^-  (unit qos)
   ?:  =(who our.bowl)  `[%live now.bowl]
-  =/  a  (ames-qos who ctx)
   =/  p  (~(get by probes) who)
-  =/  h  (heard a p)
-  ?:  ?&  ?=(^ p)
-          (gth sent.u.p h)
-          (lth sent.u.p (sub now.bowl patience))
-      ==
-    `[%dead h]
-  ?:  (gth h (sub now.bowl fresh))  `[%live h]
-  ?~  a  ?~(p ~ `[%stale h])
-  ?:  &(?=(~ p) ?=(%unborn kind.u.a))  a
-  `[%stale h]
+  ?~  p
+    =/  a  (ames-qos who ctx)
+    ?:(&(?=(^ a) ?=(%unborn kind.u.a)) a ~)
+  ::  overdue counts as unanswered even before the yawn timer lands
+  ::
+  ?:  &((gth sent.u.p got.u.p) (lth sent.u.p (sub now.bowl patience)))
+    `[%dead got.u.p]
+  ?~  ok.u.p  ~
+  `[?:(u.ok.u.p %live %dead) got.u.p]
+::
+::  +in-flight: probe out and not yet given up on
+::
+++  in-flight
+  |=  p=(unit probe)
+  ^-  ?
+  ?~  p  |
+  &((gth sent.u.p got.u.p) (gth sent.u.p (sub now.bowl patience)))
 ::
 ::  +want-probe: is it worth asking .who?
 ::
 ++  want-probe
-  |=  [who=ship =ctx p=(unit probe)]
+  |=  [who=ship p=(unit probe)]
   ^-  ?
   ?:  =(who our.bowl)  |
-  ?:  (gth (heard (ames-qos who ctx) p) (sub now.bowl recheck))  |
   ?~  p  &
-  ?.  (gth sent.u.p got.u.p)  &
-  ::  unanswered: wait for it, or give a silent ship a rest
-  ::
+  ?:  (gte got.u.p sent.u.p)  (lth got.u.p (sub now.bowl recheck))
   (lth sent.u.p (sub now.bowl redead))
+::
+++  probe-2-to-3
+  |=  p=probe-2
+  ^-  probe
+  :+  sent.p  got.p
+  ?:  (gte got.p sent.p)  ?:(=(*@da got.p) ~ `&)
+  `|
 ::
 ::  +send-probes: scry each ship that needs it, with a deadline
 ::
 ++  send-probes
   |=  who=(list ship)
   ^-  (quip card (map ship probe))
-  =/  =ctx  get-ctx
   =/  ps  probes
   =|  cards=(list card)
   |-
   ?~  who  [cards ps]
   =*  w  i.who
   =/  p  (~(get by ps) w)
-  ?.  (want-probe w ctx p)  $(who t.who)
+  ?.  (want-probe w p)  $(who t.who)
+  =/  wir  /(scot %p w)/(scot %da now.bowl)
   %=  $
     who    t.who
-    ps     (~(put by ps) w [now.bowl ?~(p *@da got.u.p)])
+    ps     (~(put by ps) w [now.bowl ?~(p *@da got.u.p) ?~(p ~ ok.u.p)])
     cards
-      :*  [%pass /probe/(scot %p w) %arvo %a %keen ~ w probe-path]
+      :*  [%pass [%probe wir] %arvo %a %keen ~ w (probe-path now.bowl)]
           [%pass /yawn/(scot %p w)/(scot %da now.bowl) %arvo %b %wait (add now.bowl patience)]
           cards
       ==
@@ -643,8 +665,7 @@
   :-  %a
   :~  ?~(q ~ s+kind.u.q)
       ?~(q ~ ?:(=(*@da last.u.q) ~ (time:enjs:format last.u.q)))
-      ::  still waiting on an answer?
-      b+?~(p | &((gth sent.u.p got.u.p) (gth sent.u.p (sub now.bowl patience))))
+      b+(in-flight p)
   ==
 ::
 ::  json
