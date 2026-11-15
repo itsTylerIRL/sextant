@@ -10,10 +10,14 @@
 ::
 ::    ames only updates its view of a peer when packets flow, so on its
 ::    own it goes stale: a ship we last heard from two weeks ago reads
-::    %dead forever.  we keep it fresh by probing: a %noun poke to the
-::    other ship's %ping agent (on %base, so every ship has it) which
-::    acks foreign pokes and does nothing else.  ack or nack, any answer
-::    means they're up.  see +status for how the evidence is weighed.
+::    %dead forever.  we keep it fresh by probing: a remote scry of the
+::    hash of their %kids desk at revision 1 (+probe-path), which ships
+::    serve to anyone (%base is private by default; %kids isn't).  any answer, even an empty one,
+::    means they're up.  unlike a poke, a scry can be cancelled: one
+::    that goes unanswered for +patience is %yawned, so nothing is left
+::    retrying in ames.  this is the same trick the kernel's own
+::    upgrade prober (ted/prob) uses.  see +status for how the evidence
+::    is weighed.
 ::
 ::    moons are not on azimuth, so we only know the moons our ship has
 ::    talked to (or our own, via jael).
@@ -27,8 +31,8 @@
 ::  next: when that timer fires, so a reload can cancel it
 ::
 +$  state-1  [%1 public=? next=(unit @da) tree=(unit octs)]
-::  probes: when we last poked a ship's %ping, and when it last answered.
-::  sent > got means a probe is still out.
+::  probes: when we last scried a ship, and when it last answered.
+::  sent > got means the last probe is out, or was given up on.
 ::
 +$  state-2
   $:  %2
@@ -43,7 +47,8 @@
 ++  fresh     ~m15  ::  heard from this recently: live
 ++  patience  ~s45  ::  probe unanswered this long: offline
 ++  recheck   ~m5   ::  don't probe a ship heard from this recently
-++  giveup    ~h1   ::  resend a probe unanswered this long
+++  redead    ~m15 ::  don't re-probe an unanswering ship sooner
+++  probe-path  /c/z/1/kids
 +$  card  card:agent:gall
 ::  mirror of point:naive, so we don't need to vendor lib/naive
 ::
@@ -196,6 +201,23 @@
     =^  cards  probes  (send-probes:hc auto-targets:hc)
     :-  [[%pass /tree %arvo %b %wait nex] cards]
     this(next `nex, tree `tree-octs:hc)
+  ::  a probe answered
+  ::
+  ?:  ?=([%probe @ ~] wire)
+    =/  who  (slaw %p i.t.wire)
+    ?.  &(?=(^ who) ?=([%ames %sage *] sign-arvo))  `this
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da])
+    `this(probes (~(put by probes) u.who p(got now.bowl)))
+  ::  a probe's time is up: cancel it if it's still out
+  ::
+  ?:  ?=([%yawn @ @ ~] wire)
+    =/  who  (slaw %p i.t.wire)
+    =/  at   (slaw %da i.t.t.wire)
+    ?.  &(?=(^ who) ?=(^ at))  `this
+    =/  p  (~(get by probes) u.who)
+    ?.  &(?=(^ p) =(sent.u.p u.at) (lth got.u.p sent.u.p))  `this
+    :_  this
+    [%pass /probe/(scot %p u.who) %arvo %a %yawn u.who probe-path]~
   ?.  ?=([%eyre %connect ~] wire)  (on-arvo:def wire sign-arvo)
   ?>  ?=([%eyre %bound *] sign-arvo)
   ~?  !accepted.sign-arvo  [dap.bowl %eyre-bind-failed binding.sign-arvo]
@@ -205,7 +227,7 @@
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _this)
   ?:  ?=([%probe @ ~] wire)
-    ::  ack or nack, they answered
+    ::  acks for %ping pokes sent by an earlier version
     ::
     =/  who  (slaw %p i.t.wire)
     ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
@@ -504,17 +526,15 @@
   ?~  p  c
   ?:((gth last.u.p last.u.c) p c)
 ::
-::  +heard: when they last provably answered: a probe ack, or a packet
-::  ames received.  ames's last-contact alone isn't proof: it's also
-::  stamped when keys first arrive, before any contact, and survives
-::  ames marking the peer %dead after 30s of quiet.  only %live means
-::  last-contact was a real packet.
+::  +heard: when they last provably answered one of our probes.  ames's
+::  last-contact can't be trusted for this: it's stamped when keys first
+::  arrive and, under mesa, when we merely send to a ship with a known
+::  lane, so ships that never replied read as recently heard.
 ::
 ++  heard
   |=  [a=(unit qos) p=(unit probe)]
   ^-  @da
-  %+  max  ?~(p *@da got.u.p)
-  ?:(&(?=(^ a) ?=(%live kind.u.a)) last.u.a *@da)
+  ?~(p *@da got.u.p)
 ::
 ::  +status: ames plus our probes, weighed by age
 ::
@@ -541,9 +561,9 @@
   ?:  (gth h (sub now.bowl fresh))  `[%live h]
   ?~  a  ?~(p ~ `[%stale h])
   ?:  &(?=(~ p) ?=(%unborn kind.u.a))  a
-  `[%stale (max h last.u.a)]
+  `[%stale h]
 ::
-::  +want-probe: is it worth poking .who to find out?
+::  +want-probe: is it worth asking .who?
 ::
 ++  want-probe
   |=  [who=ship =ctx p=(unit probe)]
@@ -551,12 +571,12 @@
   ?:  =(who our.bowl)  |
   ?:  (gth (heard (ames-qos who ctx) p) (sub now.bowl recheck))  |
   ?~  p  &
-  ::  one already out: ames retries it, so just wait (within reason)
-  ::
   ?.  (gth sent.u.p got.u.p)  &
-  (lth sent.u.p (sub now.bowl giveup))
+  ::  unanswered: wait for it, or give a silent ship a rest
+  ::
+  (lth sent.u.p (sub now.bowl redead))
 ::
-::  +send-probes: poke %ping on each ship that needs it
+::  +send-probes: scry each ship that needs it, with a deadline
 ::
 ++  send-probes
   |=  who=(list ship)
@@ -572,7 +592,11 @@
   %=  $
     who    t.who
     ps     (~(put by ps) w [now.bowl ?~(p *@da got.u.p)])
-    cards  [[%pass /probe/(scot %p w) %agent [w %ping] %poke %noun !>(~)] cards]
+    cards
+      :*  [%pass /probe/(scot %p w) %arvo %a %keen ~ w probe-path]
+          [%pass /yawn/(scot %p w)/(scot %da now.bowl) %arvo %b %wait (add now.bowl patience)]
+          cards
+      ==
   ==
 ::
 ::  +auto-targets: who the timer keeps fresh: booted galaxies and pals
@@ -619,7 +643,8 @@
   :-  %a
   :~  ?~(q ~ s+kind.u.q)
       ?~(q ~ ?:(=(*@da last.u.q) ~ (time:enjs:format last.u.q)))
-      b+?~(p | (gth sent.u.p got.u.p))
+      ::  still waiting on an answer?
+      b+?~(p | &((gth sent.u.p got.u.p) (gth sent.u.p (sub now.bowl patience))))
   ==
 ::
 ::  json

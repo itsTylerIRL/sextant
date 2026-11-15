@@ -59,7 +59,6 @@ const CLASSES = [
   ['live', 'online'], ['dead', 'offline'], ['stale', 'not heard lately'], ['unborn', 'pending'],
   ['keyed', 'booted, not contacted'], ['cold', 'spawned, never booted'], ['pal', '%pals'], ['peer', 'peers'],
 ];
-const PRI = { cold: 0, keyed: 1, stale: 1.5, unborn: 2, dead: 3, live: 4 };
 const SIZE = { cold: 0.7, keyed: 0.9, stale: 0.95, unborn: 1, dead: 1, live: 1.15 };
 
 let P = {};
@@ -342,7 +341,6 @@ function drawBase() {
   }
   // kids first, hubs on top
   for (const [n, sx, sy, r, a] of later) drawNode(c, n, sx, sy, r, a);
-  drawLabels(c);
   updateContext();
   viewMoved();
 }
@@ -434,51 +432,58 @@ function drawNode(c, n, sx, sy, r, alpha) {
   if (alpha > 0.3) sky.drawn.push(n);
 }
 
-// greedy label placement: reserve every dot, then name the most interesting
-// ships first and skip any name that would collide
-function drawLabels(c) {
-  const { w, h } = sky, CW = 6, cols = Math.floor(w / CW), rows = Math.floor(h / CW);
-  const occ = new Uint8Array(cols * rows);
-  const span = (x, y, tw, th) => [Math.floor(x / CW), Math.floor((x + tw) / CW), Math.floor(y / CW), Math.floor((y + th) / CW)];
-  const mark = (x, y, tw, th) => {
-    const [c0, c1, r0, r1] = span(x, y, tw, th);
-    for (let r = Math.max(0, r0); r <= Math.min(rows - 1, r1); r++) for (let q = Math.max(0, c0); q <= Math.min(cols - 1, c1); q++) occ[r * cols + q] = 1;
-  };
-  const tryPlace = (x, y, tw, th) => {
-    const [c0, c1, r0, r1] = span(x, y, tw, th);
-    if (c0 < 0 || r0 < 0 || c1 >= cols || r1 >= rows) return false;
-    for (let r = r0; r <= r1; r++) for (let q = c0; q <= c1; q++) if (occ[r * cols + q]) return false;
-    mark(x, y, tw, th);
-    return true;
-  };
-  const text = (t, x, y) => { c.lineWidth = 3.5; c.strokeStyle = P.bg; c.lineJoin = 'round'; c.strokeText(t, x, y); c.fillText(t, x, y); };
-  // big hubs (open galaxies and stars) are named first, centred under the
-  // hub, so their own children's dots can't crowd the name out
-  const hubs = sky.drawn.filter((n) => n.sr > 10 && matches(n)).sort((a, b) => b.sr - a.sr);
-  c.font = '600 12px ui-monospace, "SF Mono", Menlo, monospace'; c.textAlign = 'center';
-  for (const n of hubs) {
-    const tw = n.ship.length * 7.3, y = n.sy + n.sr + 6;
-    if (!tryPlace(n.sx - tw / 2, y, tw, 14)) continue;
-    c.globalAlpha = 1; c.fillStyle = n.pal || n.mine ? P.accent : P.ink;
-    text(n.ship, n.sx, y + 11);
-  }
+// names stay off the map except for the ship under the pointer and the
+// selected one, drawn on the overlay so hovering never redraws the sky
+function nameTag(c, n, col) {
+  if (!n || !sky.drawn.includes(n)) return;
+  const big = n.sr > 10;
+  c.font = (big ? '600 12px' : '11px') + ' ui-monospace, "SF Mono", Menlo, monospace';
+  let x, y;
+  if (big) { c.textAlign = 'center'; x = n.sx; y = n.sy + n.sr + 18; }
+  else { c.textAlign = 'left'; x = n.sx + n.sr + 9; y = n.sy + 4; }
+  c.globalAlpha = 1; c.lineWidth = 3.5; c.strokeStyle = P.bg; c.lineJoin = 'round';
+  c.strokeText(n.ship, x, y); c.fillStyle = col; c.fillText(n.ship, x, y);
   c.textAlign = 'left';
-  for (const n of sky.drawn) mark(n.sx - n.sr - 1, n.sy - n.sr - 1, 2 * n.sr + 2, 2 * n.sr + 2);
-  const named = new Set(hubs);
-  const order = [...sky.drawn].sort((a, b) => (b === sky.sel) - (a === sky.sel) || b.mine - a.mine || b.pal - a.pal || b.sr - a.sr || PRI[b.c] - PRI[a.c]);
-  let placed = 0;
-  for (const n of order) {
-    if (placed > 400) break;
-    if (named.has(n) || n.sr > 10 || !matches(n) || (n.sr < 2.2 && n !== sky.sel)) continue;
-    const big = n.sr > 12;
-    c.font = big ? '600 12px ui-monospace, "SF Mono", Menlo, monospace' : '10.5px ui-monospace, "SF Mono", Menlo, monospace';
-    // start one grid cell past the dot's own reserved cells
-    const tw = n.ship.length * (big ? 7.3 : 6.4), x = n.sx + n.sr + CW + 1, y = n.sy - 7;
-    if (!tryPlace(x, y, tw, 13)) continue;
-    c.globalAlpha = n.c === 'cold' ? 0.5 : n.c === 'keyed' ? 0.8 : 1;
-    c.fillStyle = n.pal || n.mine ? P.accent : n.c === 'live' ? P.live : P.ink;
-    text(n.ship, x, n.sy + 4);
-    placed++;
+}
+
+// ---------------------------------------------------------------- radar
+
+const blips = [];
+const rgba = (hex, a) => {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})` : `rgba(127,127,127,${a})`;
+};
+const scanning = () => auto.on && auto.checking > 0;
+
+// sweep around the galaxy or star in view (the whole network when zoomed out)
+function drawSweep(c, now) {
+  const k = pxScale(), n = sky.ctx;
+  let cx, cy, R;
+  if (n && sky.drawn.includes(n)) { cx = n.sx; cy = n.sy; R = n.R * k; }
+  else { [cx, cy] = toScreen(0, 0); R = 1.05 * k; }
+  R = Math.min(R, Math.hypot(sky.w, sky.h));
+  const a = ((now / 2400) * TAU) % TAU, span = 1.2, col = P.live;
+  if (c.createConicGradient) {
+    const g = c.createConicGradient(a - span, cx, cy);
+    g.addColorStop(0, rgba(col, 0));
+    g.addColorStop(span / TAU, rgba(col, 0.2));
+    g.addColorStop(Math.min(1, span / TAU + 0.001), rgba(col, 0));
+    c.fillStyle = g;
+  } else c.fillStyle = rgba(col, 0.08);
+  c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, R, a - span, a); c.closePath(); c.fill();
+  c.strokeStyle = rgba(col, 0.55); c.lineWidth = 1.2;
+  c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R); c.stroke();
+  c.strokeStyle = rgba(col, 0.18); c.lineWidth = 1;
+  for (const f of [1, 2 / 3, 1 / 3]) { c.beginPath(); c.arc(cx, cy, R * f, 0, TAU); c.stroke(); }
+}
+
+// a ring that flares out from a ship when its answer (or silence) comes in
+function drawBlips(c, now) {
+  for (let i = blips.length - 1; i >= 0; i--) {
+    const b = blips[i], p = (now - b.t) / 900;
+    if (p >= 1 || !sky.drawn.includes(b.n)) { blips.splice(i, 1); continue; }
+    c.strokeStyle = P[b.n.c] || P.ink; c.lineWidth = 1.5; c.globalAlpha = 1 - p;
+    c.beginPath(); c.arc(b.n.sx, b.n.sy, b.n.sr + 2 + p * Math.min(b.n.sr * 2 + 8, 18), 0, TAU); c.stroke();
   }
   c.globalAlpha = 1;
 }
@@ -533,6 +538,8 @@ function draw(now) {
   c.drawImage(sky.base, 0, 0);
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   let loop = !!sky.fly || sky.dirty;
+  if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; }
+  if (blips.length) { drawBlips(c, now); loop = true; }
   if (!sky.fly) {
     const live = sky.drawn.filter((n) => n.c === 'live' && matches(n));
     if (!reduceMotion && live.length && live.length < 3000) {
@@ -549,6 +556,8 @@ function draw(now) {
       c.strokeStyle = col; c.lineWidth = 1.5;
       c.beginPath(); c.arc(n.sx, n.sy, n.sr + extra, 0, TAU); c.stroke();
     }
+    if (sky.hover !== sky.sel) nameTag(c, sky.hover, P.ink);
+    nameTag(c, sky.sel, P.accent);
   }
   if (loop) kick();
 }
@@ -934,10 +943,11 @@ async function palAction(d, node, add) {
 // stale (a ship last heard two weeks ago reads "dead" forever). While the
 // map is open we keep sending the booted ships on screen, plus the selected
 // one, to /api/status. For the owner the agent probes any it hasn't heard
-// from in five minutes (one tiny poke to their %ping agent) and the next
-// reads pick up the answers. Each ship gets probed at most every 5 minutes.
+// from in five minutes (a remote scry it cancels after 45s) and the next
+// reads pick up the answers. While answers are pending a radar sweep turns
+// over the galaxy or star in view, and each result lands with a blip.
 
-const AUTO_MAX = 400, AUTO_EVERY = 10000;
+const AUTO_MAX = 400, AUTO_EVERY = 10000, AUTO_BUSY = 3000;
 const auto = { on: true, n: 0, live: 0, dead: 0, checking: 0, busy: false, sig: '', k: 0 };
 try { auto.on = localStorage.getItem('sextant-auto') !== '0'; } catch {}
 const inView = () => sky.drawn.filter((n) => n.life !== 0 && n.ship !== me?.ship).slice(0, AUTO_MAX);
@@ -947,10 +957,11 @@ function scanHud() {
   if (!btn) return;
   btn.textContent = auto.on ? 'Live status: on' : 'Live status: off';
   btn.title = auto.on
-    ? 'Ships on screen are checked automatically (each at most every 5 minutes, one tiny poke to its %ping). Click to pause.'
+    ? 'Ships on screen are checked automatically: one small remote-scry request each, at most every 5 minutes, cancelled after 45 seconds if unanswered. Click to pause.'
     : 'Paused: statuses are whatever your ship last heard. Click to check ships on screen automatically.';
+  const where = sky.ctx ? sky.ctx.ship : 'network';
   res.innerHTML = auto.on && auto.n
-    ? `${auto.n} in view · <b class="on">${auto.live} online</b> · ${auto.dead} offline${auto.checking ? ` · ${auto.checking} checking` : ''}`
+    ? `${auto.checking ? `scanning ${esc(where)} · ${auto.checking} waiting · ` : ''}<b class="on">${auto.live} online</b> · ${auto.dead} offline · ${auto.n} in view`
     : '';
 }
 
@@ -989,12 +1000,15 @@ async function refreshStatus() {
       const v = res[n.ship];
       if (!v) continue;
       const [st, last, probing] = v;
-      if (n.status !== st || n.last !== last) { n.status = st; n.last = last; prep(n); changed = true; }
+      const moved = n.status !== st, answered = n.probing && !probing;
+      if (moved || n.last !== last) { n.status = st; n.last = last; prep(n); changed = true; }
+      if ((moved || answered) && !reduceMotion) blips.push({ n, t: performance.now() });
       n.probing = probing;
       if (st === 'live') live++; else if (st === 'dead') dead++;
       if (probing) checking++;
     }
     Object.assign(auto, { n: ships.length, live, dead, checking });
+    if (blips.length || checking) kick();
     if (changed) {
       sky.dirty = true; kick(); legend();
       listedFor = undefined; listFor(sky.ctx);
@@ -1008,7 +1022,10 @@ async function refreshStatus() {
     }
   } catch {} finally { auto.busy = false; scanHud(); }
 }
-setInterval(refreshStatus, AUTO_EVERY);
+// poll quickly while answers are pending, slowly otherwise
+(function tick() {
+  refreshStatus().finally(() => setTimeout(tick, auto.checking ? AUTO_BUSY : AUTO_EVERY));
+})();
 
 function dive(n) { if (opens(n)) location.hash = '#/' + n.ship; }
 function up() {
