@@ -306,8 +306,9 @@ const ZMAX = 40000;
 // drawn size of a ship from the size of its disc on screen: a fixed-size dot
 // while its disc is small, then a hub that grows with it once it opens
 function dotPx(n, discPx) {
-  if (n.kind === 'galaxy') return Math.min(46, Math.max(Math.min(discPx * 0.4, 6.5), discPx * 0.2));
-  if (n.kind === 'star') return Math.min(34, Math.max(1.2, Math.min(discPx * 0.45, 5), discPx * 0.2));
+  // open hubs stay small so the ships they sponsor show through
+  if (n.kind === 'galaxy') return Math.min(26, Math.max(Math.min(discPx * 0.4, 6.5), discPx * 0.09));
+  if (n.kind === 'star') return Math.min(18, Math.max(1.2, Math.min(discPx * 0.45, 5), discPx * 0.09));
   if (n.kind === 'moon') return Math.min(12, Math.max(1.6, discPx * 0.5));
   // a planet with moons is a hub: keep it smaller so its moons show
   if (n.kids?.length) return Math.min(22, Math.max(1.8, Math.min(discPx * 0.5, 7), discPx * 0.22));
