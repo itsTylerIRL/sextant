@@ -322,20 +322,6 @@ function drawBase() {
   const k = pxScale();
   const [ox, oy] = toScreen(0, 0);
 
-  // graduated rim around the whole network
-  const R = 1.05 * k;
-  if (R < Math.hypot(w, h) * 3) {
-    c.strokeStyle = P.ring; c.lineWidth = 1;
-    c.beginPath(); c.arc(ox, oy, R, 0, TAU); c.stroke();
-    c.beginPath(); c.arc(ox, oy, R + 14, 0, TAU); c.stroke();
-    c.beginPath();
-    for (let i = 0; i < 64; i++) {
-      const a = (i / 64) * TAU - Math.PI / 2, len = i % 8 === 0 ? 14 : i % 2 === 0 ? 7 : 3.5;
-      c.moveTo(ox + Math.cos(a) * R, oy + Math.sin(a) * R);
-      c.lineTo(ox + Math.cos(a) * (R + len), oy + Math.sin(a) * (R + len));
-    }
-    c.stroke();
-  }
   // the galaxy spiral
   drawGuide(c, T.guide, 256, 0, 0, 1, 1);
 
@@ -478,8 +464,6 @@ function drawSweep(c, now) {
   c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, R, a - span, a); c.closePath(); c.fill();
   c.strokeStyle = rgba(col, 0.55); c.lineWidth = 1.2;
   c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R); c.stroke();
-  c.strokeStyle = rgba(col, 0.18); c.lineWidth = 1;
-  for (const f of [1, 2 / 3, 1 / 3]) { c.beginPath(); c.arc(cx, cy, R * f, 0, TAU); c.stroke(); }
 }
 
 // a ring that flares out from a ship when its answer (or silence) comes in
