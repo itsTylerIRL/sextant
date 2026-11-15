@@ -896,14 +896,16 @@ async function loadApps(ship, until = 0) {
 }
 
 // one app card; .withShip adds the publisher (for the network-wide list)
-function appCard(a, withShip = false) {
+function appCard(a, withShip = false, rank = 0) {
   const icon = okUrl(a.image)
     ? `<img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="background:${okHex(a.color)}">`
     : `<span class="appicon" style="background:${okHex(a.color)}">${esc((a.title || a.desk).slice(0, 1).toUpperCase())}</span>`;
   const by = withShip ? ` · <a href="#/${esc(a.ship)}" title="show ${esc(a.ship)} on the map">${esc(a.ship)}</a>` : '';
-  return `<div class="app">${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}${by}</span></div>
+  const pop = a.n ? `<span class="pop" title="${a.n} install${a.n === 1 ? '' : 's'} heard of from pals and their pals${a.mine ? ', including yours' : ''}${a.t >= 0.05 ? ` · trending ${a.t.toFixed(1)}` : ''}">${a.n} nearby</span>` : '';
+  const via = a.heard ? '<span class="muted" title="known only through pals, not through a publisher you follow"> · via pals</span>' : '';
+  return `<div class="app">${rank ? `<span class="rank">${rank}</span>` : ''}${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}${by}${via}</span></div>
     ${a.info ? `<div class="appinfo">${esc(a.info)}</div>` : ''}</div>
-    ${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-ship="${esc(a.ship || '')}" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div>`;
+    <div class="appside">${pop}${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-ship="${esc(a.ship || '')}" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div></div>`;
 }
 // install buttons, and icons that fail to load fall back to a lettered tile
 function wireApps(el, ship) {
@@ -1376,7 +1378,22 @@ async function peers() {
 // Every app our ship knows is published anywhere, via %treaty: from the
 // publishers it follows (allies), including any added here.
 
-const appsUi = { q: '', by: null, hideHave: false, poll: 0 };
+const appsUi = { q: '', by: null, hideHave: false, poll: 0, sort: 'popular' };
+try { appsUi.sort = localStorage.getItem('sextant-appsort') || 'popular'; } catch {}
+// trending: every install counts 1 now, halving each day after
+const trend = (ats) => ats.reduce((t, at) => t + Math.pow(0.5, Math.max(0, Date.now() - at) / 86400000), 0);
+// treaty apps and gossiped hits, merged by publisher/desk
+function mergeApps(c) {
+  const by = new Map();
+  for (const a of c.apps) by.set(a.ship + '/' + a.desk, { ...a, n: 0, at: [], mine: false });
+  for (const h of c.hits || []) {
+    const k = h.ship + '/' + h.desk, a = by.get(k);
+    if (a) Object.assign(a, { n: h.n, at: h.at, mine: h.mine });
+    else by.set(k, { ...h, heard: true });
+  }
+  for (const a of by.values()) a.t = trend(a.at);
+  return [...by.values()];
+}
 async function appsView() {
   setTab('apps'); mapMode(false); crumbs.innerHTML = '<b>apps on the network</b><span class="muted crumbnote">as %treaty knows them</span>';
   clearTimeout(appsUi.poll);
@@ -1396,22 +1413,44 @@ async function appsView() {
       </div>
       <div class="appfilters">
         <input id="appq" type="search" placeholder="search apps" spellcheck="false" aria-label="Search apps">
+        <div class="seg" role="tablist" id="appsort">
+          <button data-s="popular">popular</button><button data-s="trending">trending</button><button data-s="az">a–z</button>
+        </div>
         <label class="muted"><input type="checkbox" id="apphave"> hide installed</label>
       </div>
+      <div class="sharerow muted"><label><input type="checkbox" id="appshare"> share my installs</label>
+        <span>Install counts come from mutual pals running sextant, and their pals (2 hops), like %hits. Each install is anonymous; only apps installed from a publisher count.</span></div>
       <div class="chips" id="appby"></div>
       <div class="appnote muted" id="appnote"></div>
       <div class="appgrid" id="appgrid"></div>
     </section>`;
-    $('appq').oninput = (e) => { appsUi.q = e.target.value.toLowerCase(); drawApps(c); };
-    $('apphave').onchange = (e) => { appsUi.hideHave = e.target.checked; drawApps(c); };
+    $('appq').oninput = (e) => { appsUi.q = e.target.value.toLowerCase(); drawApps(appsUi.cat); };
+    $('apphave').onchange = (e) => { appsUi.hideHave = e.target.checked; drawApps(appsUi.cat); };
+    $('appsort').querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => {
+      appsUi.sort = b.dataset.s;
+      try { localStorage.setItem('sextant-appsort', appsUi.sort); } catch {}
+      drawApps(appsUi.cat);
+    }));
+    $('appshare').onchange = async (e) => {
+      const on = e.target.checked;
+      const r = await fetch(`${API}/share/${on ? 'on' : 'off'}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+      if (!r || !r.ok) { e.target.checked = !on; $('appnote').textContent = r && r.status === 403 ? 'log in to change sharing' : 'failed'; }
+    };
     $('allyform').onsubmit = (e) => { e.preventDefault(); addPublisher(normalize($('allyq').value)); };
   }
-  $('apphave').checked = appsUi.hideHave; $('appq').value = appsUi.q;
+  $('apphave').checked = appsUi.hideHave; $('appq').value = appsUi.q; $('appshare').checked = !!c.share;
   appsUi.cat = c;
   drawApps(c);
 }
 function drawApps(c) {
-  const apps = c.apps.slice().sort((a, b) => (a.title || a.desk).localeCompare(b.title || b.desk));
+  const name = (a) => a.title || a.desk;
+  const order = {
+    popular: (a, b) => b.n - a.n || b.t - a.t || name(a).localeCompare(name(b)),
+    trending: (a, b) => b.t - a.t || b.n - a.n || name(a).localeCompare(name(b)),
+    az: (a, b) => name(a).localeCompare(name(b)),
+  }[appsUi.sort] || ((a, b) => b.n - a.n);
+  $('appsort').querySelectorAll('[data-s]').forEach((b) => b.classList.toggle('on', b.dataset.s === appsUi.sort));
+  const apps = mergeApps(c).sort(order);
   const pubs = new Map();
   for (const a of apps) pubs.set(a.ship, (pubs.get(a.ship) || 0) + 1);
   for (const al of c.allies) if (!pubs.has(al.ship)) pubs.set(al.ship, 0);
@@ -1422,9 +1461,10 @@ function drawApps(c) {
   const q = appsUi.q;
   const shown = apps.filter((a) => (!appsUi.by || a.ship === appsUi.by) && (!appsUi.hideHave || !a.installed)
     && (!q || [a.title, a.desk, a.info, a.ship].some((x) => (x || '').toLowerCase().includes(q))));
-  $('appn').textContent = `${shown.length} of ${apps.length} · ${pubs.size} publishers`;
+  const heard = apps.reduce((t, a) => t + a.n, 0);
+  $('appn').textContent = `${shown.length} of ${apps.length} · ${pubs.size} publishers · ${heard} installs heard of`;
   const el = $('appgrid');
-  el.innerHTML = shown.length ? shown.map((a) => appCard(a, true)).join('') : `<div class="empty">${apps.length ? 'No apps match.' : 'No apps yet. Add a publisher above to see what it offers.'}</div>`;
+  el.innerHTML = shown.length ? shown.map((a, i) => appCard(a, true, appsUi.sort === 'az' ? 0 : i + 1)).join('') : `<div class="empty">${apps.length ? 'No apps match.' : 'No apps yet. Add a publisher above to see what it offers.'}</div>`;
   wireApps(el);
 }
 // follow a publisher through %treaty, then wait for its apps to arrive

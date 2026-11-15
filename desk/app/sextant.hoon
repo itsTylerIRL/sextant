@@ -22,9 +22,9 @@
 ::    talked to (or our own, via jael).
 ::
 /-  vitals, docket
-/+  default-agent, dbug, server
+/+  default-agent, dbug, server, gossip
 |%
-+$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4)
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5)
 +$  state-0  [%0 public=?]
 ::  tree: cached /api/tree body, rebuilt by a behn timer; not persisted
 ::  next: when that timer fires, so a reload can cancel it
@@ -65,6 +65,38 @@
       dirty=?
   ==
 +$  probe  [sent=@da got=@da ok=(unit ?) miss=@ud]
+::  app hits, gossiped like %hits does: every install of an app (synced
+::  from a publisher) is one anonymous hit, passed to mutual pals and on
+::  to theirs (+hops).  .id is random per install, so relayed copies
+::  count once and an uninstall can retract its own install.
+::
+::  share: whether we gossip our own installs
+::  mine:  our installs we've announced, by [publisher desk]
+::  hits:  every install we've heard of (ours included), by app
+::
++$  state-5
+  $:  %5
+      public=?
+      next=(unit @da)
+      tree=(unit octs)
+      probes=(map ship probe)
+      dirty=?
+      share=?
+      mine=(map [ship desk] [at=@da id=@uv])
+      hits=(map [ship desk] app-hits)
+  ==
++$  app-card  [title=@t info=@t color=@ux image=@t version=@t]
++$  app-hits  [card=app-card ids=(map @uv [at=@da on=?])]
++$  hit       [id=@uv app=[=ship =desk] at=@da on=? card=app-card]
+++  hops      2
+++  gossip-config  |=(on=? `config:gossip`[?:(on hops 0) %mutuals %mutuals |])
+::  mirror of $pike (sur/hood.hoon on %base)
++$  pike
+  $:  sync=(unit [=ship =desk])
+      hash=@uv
+      zest=?(%live %dead %held)
+      wic=(set [lal=@tas num=@ud])
+  ==
 ::
 ++  patience  ~s20  ::  probe unanswered this long: offline
 ++  recheck   ~m5   ::  don't re-probe a ship that answered this recently
@@ -144,8 +176,12 @@
   ==
 --
 ::
+%-  %+  agent:gossip  (gossip-config &)
+    %-  ~(gas by *(map mark $-(* vase)))
+    :~  [%sextant-hit |=(n=* !>(((soft hit) n)))]
+    ==
 %-  agent:dbug
-=|  state-4
+=|  state-5
 =*  state  -
 ^-  agent:gall
 =<
@@ -166,7 +202,9 @@
   |=  old-vase=vase
   ^-  (quip card _this)
   =/  old  !<(versioned-state old-vase)
-  =/  new=state-4
+  =/  new=state-5
+    ?:  ?=(%5 -.old)  old(tree ~)
+    =;  n=state-4  [%5 public.n next.n tree.n probes.n dirty.n & ~ ~]
     ?-  -.old
       %0  [%4 public.old ~ ~ ~ |]
       %1  [%4 public.old next.old ~ ~ |]
@@ -201,6 +239,23 @@
       %handle-http-request
     =+  !<([eyre-id=@ta req=inbound-request:eyre] vase)
     =/  site  site:(parse-request-line:server url.request.req)
+    ::  POST /api/share/on, /api/share/off: gossip our installs, or not
+    ::
+    ?:  ?&  ?=([%apps %sextant %api %share ?(%on %off) ~] site)
+            ?=(%'POST' method.request.req)
+            authenticated.req
+        ==
+      =/  on=?  =('on' i.t.t.t.t.site)
+      :_  this(share on)
+      %+  weld
+        ^-  (list card)
+        :-  (configure:gossip (gossip-config on))
+        ::  turning it on: say what we have
+        ?.  on  ~
+        %+  turn  ~(tap by mine)
+        |=  [k=[ship desk] at=@da id=@uv]
+        (invent:gossip %sextant-hit !>(`hit`[id k at & card:(~(gut by hits) k *app-hits)]))
+      (give-simple-payload:app:server eyre-id [[204 ~] ~])
     ::  POST /api/trace/~sampel: probe every hop between us and them now,
     ::  past the usual limits (a handful of ships, asked for by the owner)
     ::
@@ -248,6 +303,15 @@
   |=  =path
   ^-  (quip card _this)
   ?:  ?=([%http-response @ ~] path)  `this
+  ::  a pal subscribed through gossip: tell them our own installs
+  ::
+  ?:  =(/~/gossip/source path)
+    :_  this
+    ?.  share  ~
+    %+  turn  ~(tap by mine)
+    |=  [k=[ship desk] at=@da id=@uv]
+    =/  c  card:(~(gut by hits) k *app-hits)
+    [%give %fact ~ %sextant-hit !>(`hit`[id k at & c])]
   (on-watch:def path)
 ::
 ++  on-arvo
@@ -260,6 +324,10 @@
     ::  (+want-probe limits how often each one is actually asked)
     ::
     =^  cards  probes  (send-probes:hc auto-targets:hc)
+    ::  announce apps we've installed or removed since last time
+    ::
+    =^  hit-cards  state  (sync-installs:hc state)
+    =.  cards  (weld cards hit-cards)
     :-  [[%pass /tree %arvo %b %wait nex] cards]
     ?.  |(dirty ?=(~ tree))  this(next `nex)
     this(next `nex, tree `tree-octs:hc, dirty |)
@@ -288,6 +356,14 @@
 ++  on-agent
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _this)
+  ::  a hit from a pal (or a pal's pal), via gossip
+  ::
+  ?:  =(/~/gossip/gossip wire)
+    ?.  ?=(%fact -.sign)  `this
+    ?.  =(%sextant-hit p.cage.sign)  `this
+    =/  h  !<((unit hit) q.cage.sign)
+    ?~  h  `this
+    `this(hits (add-hit:hc hits u.h))
   ?:  ?=([%probe @ ~] wire)
     ::  acks for %ping pokes sent by an earlier version
     ::
@@ -827,6 +903,9 @@
       |=  [s=@p ds=(set [@p @tas])]
       (pairs ~[ship+s+(scot %p s) desks+(numb ~(wyt in ds))])
       apps+a+(turn ts |=([[s=@p d=@tas] t=treaty] (app-json s d t have)))
+      share+b+share
+      hops+(numb hops)
+      hits+(hits-json have)
   ==
 ::
 ::  +tiny: compact row for /api/tree
@@ -912,6 +991,125 @@
       =/  rec  .^(pal-records %gx (bp %pals /noun))
       =/  a  (~(get by receipts.rec) who)
       ?~(a ~ b+u.a)
+  ==
+::
+::  +my-installs: apps we run that kiln syncs from a publisher, with
+::  their dockets.  like %hits, desks with no publisher (|new-desk,
+::  installed from a file) don't count, so dev desks stay private.
+::
+++  my-installs
+  ^-  (map [ship desk] app-card)
+  =/  pk  .^((map desk pike) %gx (bp %hood /kiln/pikes/kiln-pikes))
+  =/  ch=(map desk docket:docket)
+    ?.  (running %docket)  ~
+    =/  u  .^(charge-update:docket %gx (bp %docket /charges/charge-update))
+    ?.  ?=(%initial -.u)  ~
+    (~(run by initial.u) |=(c=charge:docket docket.c))
+  %-  ~(gas by *(map [ship desk] app-card))
+  %+  murn  ~(tap by pk)
+  |=  [d=desk p=pike]
+  ^-  (unit [[ship desk] app-card])
+  ?~  sync.p  ~
+  ?.  ?=(%live zest.p)  ~
+  ?:  =(ship.u.sync.p our.bowl)  ~
+  =/  k  (~(get by ch) d)
+  :+  ~  [ship desk]:u.sync.p
+  ?~  k  [d '' 0x0 '' '']
+  %-  bound-card
+  :*  title.u.k  info.u.k  color.u.k
+      ?~(image.u.k '' u.image.u.k)
+      (crip "{(scow %ud major.version.u.k)}.{(scow %ud minor.version.u.k)}.{(scow %ud patch.version.u.k)}")
+  ==
+::
+::  +sync-installs: stamp new installs and retract removed ones, as hits
+::
+++  sync-installs
+  |=  st=state-5
+  ^-  (quip card state-5)
+  =/  now-have  my-installs
+  =|  cards=(list card)
+  =/  new  (skip ~(tap by now-have) |=([k=[ship desk] *] (~(has by mine.st) k)))
+  |-
+  ?^  new
+    =/  h=hit  [(sham eny.bowl p.i.new) p.i.new now.bowl & q.i.new]
+    %=  $
+      new      t.new
+      mine.st  (~(put by mine.st) p.i.new [now.bowl id.h])
+      hits.st  (add-hit hits.st h)
+      cards    ?.(share.st cards [(invent:gossip %sextant-hit !>(h)) cards])
+    ==
+  =/  gone  (skip ~(tap by mine.st) |=([k=[ship desk] *] (~(has by now-have) k)))
+  |-
+  ?~  gone  [(flop cards) st]
+  =*  k  p.i.gone
+  =/  h=hit  [id.q.i.gone k at.q.i.gone | card:(~(gut by hits.st) k *app-hits)]
+  %=  $
+    gone     t.gone
+    mine.st  (~(del by mine.st) k)
+    hits.st  (add-hit hits.st h)
+    cards    ?.(share.st cards [(invent:gossip %sextant-hit !>(h)) cards])
+  ==
+::
+::  +bound-card: cap what a peer (or publisher) can make us store
+::
+++  bound-card
+  |=  c=app-card
+  ^-  app-card
+  :*  (end 3^80 title.c)
+      (end 3^240 info.c)
+      (end 3^3 color.c)
+      ?.(=('https://' (end 3^8 image.c)) '' (end 3^400 image.c))
+      (end 3^20 version.c)
+  ==
+::
+::  +add-hit: record a hit we heard (or made), within limits
+::
+++  add-hit
+  |=  [hs=(map [ship desk] app-hits) h=hit]
+  ^-  (map [ship desk] app-hits)
+  ?.  ((sane %tas) desk.app.h)  hs
+  =/  cur  (~(get by hs) app.h)
+  ?:  &(?=(~ cur) (gte ~(wyt by hs) 2.000))  hs
+  =/  ah=app-hits  (fall cur [(bound-card card.h) ~])
+  ?:  &(!(~(has by ids.ah) id.h) (gte ~(wyt by ids.ah) 5.000))  hs
+  ::  an id that has been retracted stays retracted
+  ::
+  =/  was  (~(get by ids.ah) id.h)
+  ?:  &(?=(^ was) !on.u.was)  hs
+  =/  at  ?:((gth at.h now.bowl) now.bowl at.h)
+  =.  ids.ah  (~(put by ids.ah) id.h [at on.h])
+  =?  card.ah  &(on.h !=('' title.card.h))  (bound-card card.h)
+  (~(put by hs) app.h ah)
+::
+::  +hits-json: per app, installs heard of and when (for trending)
+::
+++  hits-json
+  |=  have=(set @tas)
+  ^-  json
+  :-  %a
+  %+  murn  ~(tap by hits)
+  |=  [[pub=ship dk=desk] ah=app-hits]
+  ^-  (unit json)
+  =/  ons=(list @da)
+    %+  sort
+      (murn ~(val by ids.ah) |=([at=@da on=?] ?.(on ~ `at)))
+    gth
+  ?~  ons  ~
+  =/  c  card.ah
+  =,  enjs:format
+  :-  ~
+  %-  pairs
+  :~  ship+s+(scot %p pub)
+      desk+s+dk
+      n+(numb (lent ons))
+      at+a+(turn (scag 200 `(list @da)`ons) time)
+      mine+b+(~(has by mine) [pub dk])
+      installed+b+(~(has in have) dk)
+      title+s+?:(=('' title.c) dk title.c)
+      info+s+info.c
+      color+s+(crip ((x-co:co 6) color.c))
+      image+?:(=('' image.c) ~ s+image.c)
+      version+s+version.c
   ==
 ::
 ::  +saxo: hierarchical chain up to the galaxy (no jael needed)

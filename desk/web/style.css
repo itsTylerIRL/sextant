@@ -296,3 +296,14 @@ b.on { color: var(--live); font-weight: 600; }
 .appdir input[type=search], .allyform input { background: var(--bg); color: var(--ink); border: 1px solid var(--line);
   border-radius: 7px; padding: 6px 9px; font: 12px var(--mono); }
 .appdir input[type=search]:focus, .allyform input:focus { outline: 1px solid var(--accent); }
+
+.app .rank { flex: none; width: 20px; text-align: right; font: 600 12px var(--mono); color: var(--muted); }
+.app .pop { flex: none; font: 11px var(--mono); color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 45%, transparent);
+  border-radius: 999px; padding: 0 7px; }
+.sharerow { display: flex; gap: 10px; align-items: baseline; margin: 0 14px 10px; font-size: 11px; flex-wrap: wrap; }
+.sharerow label { display: flex; gap: 5px; align-items: center; color: var(--ink); font-size: 12px; white-space: nowrap; }
+.appfilters .seg button { font-size: 11px; }
+.app .appside { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+/* the name wins over the desk/version line when space is short */
+.apptitle b { flex: 0 0 auto; max-width: 100%; }
+.apptitle span { flex: 1 1 auto; min-width: 0; }
