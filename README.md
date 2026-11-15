@@ -14,7 +14,7 @@
   <code>|install ~nosfyl %sextant</code>
 </p>
 
-![The network: all 256 galaxies on one spiral](docs/screenshots/network.png)
+![The network: all 256 galaxies on one spiral](docs/screenshots/v1.1/network.png)
 
 ## What it does
 
@@ -29,7 +29,7 @@ Sextant reads the Azimuth state your ship already keeps and draws the whole netw
 
 | A galaxy and the stars it sponsors | A star and its planets |
 |---|---|
-| ![~rus and its stars](docs/screenshots/galaxy.png) | ![~marzod and its planets](docs/screenshots/star.png) |
+| ![~rus and its stars](docs/screenshots/v1.1/galaxy.png) | ![~marzod and its planets](docs/screenshots/v1.1/star.png) |
 
 ### Live status
 
@@ -53,7 +53,7 @@ Click any ship to select it. Click it again to zoom in.
 
 | Selected ship | Route trace |
 |---|---|
-| ![~raddem-tidwyt selected](docs/screenshots/ship.png) | ![a route traced to ~raddem-tidwyt](docs/screenshots/trace.png) |
+| ![~raddem-tidwyt selected](docs/screenshots/v1.1/ship.png) | ![a route traced to ~raddem-tidwyt](docs/screenshots/v1.1/trace.png) |
 
 ### Route tracer
 
@@ -63,7 +63,7 @@ If a hop is silent but a ship behind it answered, that hop is up and has probabl
 
 ### Apps on the network
 
-![the Apps tab](docs/screenshots/apps.png)
+![the Apps tab](docs/screenshots/v1.1/apps.png)
 
 The **Apps** tab lists every app your ship knows is published, from the publishers it follows through `%treaty`. Search them, filter by publisher, hide what you have, install with a click, or **add a publisher** by name to see what it offers.
 
@@ -75,14 +75,14 @@ The **Feed** tab lists what `%azimuth` reports as it happens: breaches, first bo
 
 Click **◎** next to any address, or search for an `0x…` address, to see every point it owns or is a proxy for, and highlight them on the map.
 
-![the points one address controls](docs/screenshots/owner.png)
+![the points one address controls](docs/screenshots/v1.1/owner.png)
 
 ### Finding ships
 
 - **Search** suggests galaxies, stars, loaded planets, your pals and your peers as you type, and accepts Ethereum addresses.
 - The **legend** filters the map by status, pals, or peers (the ships your ship has talked to, plus the galaxies and stars they live under).
 
-![search](docs/screenshots/search.png)
+![search](docs/screenshots/v1.1/search.png)
 
 ## Install
 
