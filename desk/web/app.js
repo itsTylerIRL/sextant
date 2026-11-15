@@ -41,7 +41,7 @@ function ago(ms) {
   return Math.round(s / 86400) + 'd ago';
 }
 const dot = (st) => `<i class="dot ${st || 'none'}" title="${esc(st || 'never contacted')}"></i>`;
-const statusText = (st) => ({ live: 'live route', dead: 'unreachable', unborn: 'pending', null: 'never contacted' }[st] ?? 'never contacted');
+const statusText = (st) => ({ live: 'online', dead: 'offline', unborn: 'pending', stale: 'not heard from lately', null: 'never contacted' }[st] ?? 'never contacted');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // ---------------------------------------------------------------- classes
@@ -50,15 +50,16 @@ function cls(s) {
   if (s.status === 'live') return 'live';
   if (s.status === 'dead') return 'dead';
   if (s.status === 'unborn') return 'unborn';
+  if (s.status === 'stale') return 'stale';
   if (s.life === 0) return 'cold';
   return 'keyed';
 }
 const isPal = (s) => !!(s.target || s.leech);
 const CLASSES = [
-  ['live', 'live route'], ['dead', 'unreachable'], ['unborn', 'pending'],
+  ['live', 'online'], ['dead', 'offline'], ['stale', 'not heard lately'], ['unborn', 'pending'],
   ['keyed', 'booted, not contacted'], ['cold', 'spawned, never booted'], ['pal', '%pals'], ['peer', 'peers'],
 ];
-const PRI = { cold: 0, keyed: 1, unborn: 2, dead: 3, live: 4 };
+const PRI = { cold: 0, keyed: 1, stale: 1.5, unborn: 2, dead: 3, live: 4 };
 const SIZE = { cold: 0.7, keyed: 0.9, unborn: 1, dead: 1, live: 1.15 };
 
 let P = {};
@@ -68,7 +69,7 @@ function readPalette() {
   P = {
     bg: v('sky-bg'), ring: v('sky-ring'), slot: v('sky-slot'), dust: v('sky-dust'),
     keyed: v('sky-keyed'), cold: v('sky-cold'), live: v('live'), dead: v('dead'),
-    unborn: v('unborn'), accent: v('accent'), ink: v('ink'), muted: v('muted'),
+    unborn: v('unborn'), stale: v('stale'), accent: v('accent'), ink: v('ink'), muted: v('muted'),
   };
 }
 
@@ -149,7 +150,7 @@ function armLayout(N, q, r0) {
 
 // ---------------------------------------------------------------- the tree
 
-const ST = [null, 'live', 'dead', 'unborn'];
+const ST = [null, 'live', 'dead', 'unborn', 'stale'];
 let T = null; // { gals, byName, guide }
 
 function buildTree(raw) {
@@ -343,7 +344,7 @@ function drawBase() {
   for (const [n, sx, sy, r, a] of later) drawNode(c, n, sx, sy, r, a);
   drawLabels(c);
   updateContext();
-  if (!scan || !scan.running) scanHud();
+  viewMoved();
 }
 
 function drawGuide(c, pos, N, cx, cy, scale, alpha) {
@@ -660,7 +661,7 @@ function tip(n, pt) {
   if (!n) { el.hidden = true; return; }
   const rel = n.target && n.leech ? 'mutual pal' : n.target ? 'you added them' : n.leech ? 'they added you' : '';
   const spon = n.kind === 'galaxy' ? `sponsors ${n.ns} stars${n.np ? `, ${n.np} planets` : ''}` : n.kind === 'star' ? `sponsors ${n.n.toLocaleString()} planets · under ${n.parentNode.ship}` : `under ${n.parentNode?.ship ?? ''}`;
-  el.innerHTML = `<b>${esc(n.ship)}</b><span>${esc(n.kind)} · ${esc(n.life === 0 ? 'never booted' : statusText(n.status))}${n.status && n.last ? ' · ' + ago(n.last) : ''}</span><span>${esc(spon)}</span>${n.adopted ? `<span class="pal">adopted · spawned under ${esc(n.origin)}</span>` : ''}${n.peer ? '<span>your ship has talked to it</span>' : ''}${n.scanned ? `<span>scan: ${esc({ yes: 'online', 'no-sponsor-hit': 'online (reachable via its sponsor)', 'no-sponsor-miss': 'offline', 'no-their-galaxy': 'unknown (its galaxy is unreachable)', timeout: 'no answer in 45s' }[n.scanned] || n.scanned)}</span>` : ''}${rel ? `<span class="pal">${rel}</span>` : ''}`;
+  el.innerHTML = `<b>${esc(n.ship)}</b><span>${esc(n.kind)} · ${esc(n.life === 0 ? 'never booted' : statusText(n.status))}${n.status && n.last ? ' · ' + ago(n.last) : ''}</span><span>${esc(spon)}</span>${n.adopted ? `<span class="pal">adopted · spawned under ${esc(n.origin)}</span>` : ''}${n.peer ? '<span>your ship has talked to it</span>' : ''}${n.probing ? '<span>checking…</span>' : ''}${rel ? `<span class="pal">${rel}</span>` : ''}`;
   el.hidden = false;
   const x = Math.min(pt[0] + 14, sky.w - el.offsetWidth - 8), y = pt[1] + 16 + el.offsetHeight > sky.h ? pt[1] - el.offsetHeight - 10 : pt[1] + 16;
   el.style.transform = `translate(${x}px, ${y}px)`;
@@ -736,8 +737,11 @@ async function select(n) {
   } catch (e) { $('panel').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+let panelData = null;
+const panelSub = (d) => `${esc(d.kind)} · ${d.life === 0 ? 'never booted' : statusText(d.status)}${d.status && d.last ? ' · heard ' + ago(d.last) : ''}`;
 function renderPanel(d, node = null) {
   const el = $('panel');
+  panelData = d;
   if (!d) {
     const ctx = sky.ctx;
     if (ctx) {
@@ -771,8 +775,8 @@ function renderPanel(d, node = null) {
   ].filter(Boolean).join('');
   const pal = palParts(d);
   el.innerHTML = `
-    <div class="phead">${sigilBox(d)}<div class="ptitle"><h2 class="pname">${dot(d.status)}${esc(d.ship)}</h2>
-    <div class="sub">${esc(d.kind)} · ${d.life === 0 ? 'never booted' : statusText(d.status)}${d.status ? ' · ' + ago(d.last) : ''}</div>
+    <div class="phead">${sigilBox(d)}<div class="ptitle"><h2 class="pname"><span id="pdot">${dot(d.status)}</span>${esc(d.ship)}</h2>
+    <div class="sub" id="psub">${panelSub(d)}</div>
     ${opens(node) ? `<button class="primary dive" id="dive">Zoom into ${node.kind === 'galaxy' ? 'its stars' : 'its planets'} ›</button>` : ''}</div></div>
     <div class="seg ptabs" role="tablist">
       <button role="tab" data-ptab="overview">Overview</button>
@@ -924,86 +928,87 @@ async function palAction(d, node, add) {
   } catch (e) { if (pb) { pb.disabled = false; pb.textContent = e.message; } }
 }
 
-// ---------------------------------------------------------------- scan
+// ---------------------------------------------------------------- live status
 //
-// Nobody keeps a list of who is online: a ship only knows about ships it has
-// exchanged packets with. A scan asks %vitals to run a connection check on
-// each booted ship in the current view, a few at a time, and paints the
-// results as they arrive.
+// Ames only knows what it last heard, so on its own a ship's status goes
+// stale (a ship last heard two weeks ago reads "dead" forever). While the
+// map is open we keep sending the booted ships on screen, plus the selected
+// one, to /api/status. For the owner the agent probes any it hasn't heard
+// from in five minutes (one tiny poke to their %ping agent) and the next
+// reads pick up the answers. Each ship gets probed at most every 5 minutes.
 
-const SCAN_MAX = 400, SCAN_PAR = 6;
-let scan = null;
-// what's on screen right now, booted ships only
-const inView = () => sky.drawn.filter((n) => n.life !== 0 && n.ship !== me?.ship).slice(0, SCAN_MAX);
+const AUTO_MAX = 400, AUTO_EVERY = 10000;
+const auto = { on: true, n: 0, live: 0, dead: 0, checking: 0, busy: false, sig: '', k: 0 };
+try { auto.on = localStorage.getItem('sextant-auto') !== '0'; } catch {}
+const inView = () => sky.drawn.filter((n) => n.life !== 0 && n.ship !== me?.ship).slice(0, AUTO_MAX);
 
 function scanHud() {
-  const btn = $('scanbtn'), res = $('scanres'), bar = $('scanbar');
+  const btn = $('scanbtn'), res = $('scanres');
   if (!btn) return;
-  if (!me?.vitals) { $('scanhud').hidden = true; return; }
-  if (scan && scan.running) {
-    btn.textContent = 'Stop scan';
-    bar.parentElement.hidden = false; bar.style.width = (100 * scan.done) / scan.total + '%';
-    res.innerHTML = `${scan.done}/${scan.total} · <b class="on">${scan.online} online</b> · ${scan.offline} offline${scan.unknown ? ` · ${scan.unknown} ?` : ''}`;
-    return;
-  }
-  const n = inView().length;
-  btn.textContent = n ? `Scan ${n} in view` : 'Scan view';
-  btn.disabled = !n;
-  btn.title = `Run a %vitals connection check on the ${n} booted ships on screen, ${SCAN_PAR} at a time. This sends traffic to those ships.`;
-  if (scan && !scan.running) {
-    bar.parentElement.hidden = false; bar.style.width = '100%';
-    res.innerHTML = `last scan: <b class="on">${scan.online} online</b> · ${scan.offline} offline${scan.unknown ? ` · ${scan.unknown} ?` : ''}${scan.msg ? ' · ' + esc(scan.msg) : ''}`;
-  } else { bar.parentElement.hidden = true; res.textContent = ''; }
+  btn.textContent = auto.on ? 'Live status: on' : 'Live status: off';
+  btn.title = auto.on
+    ? 'Ships on screen are checked automatically (each at most every 5 minutes, one tiny poke to its %ping). Click to pause.'
+    : 'Paused: statuses are whatever your ship last heard. Click to check ships on screen automatically.';
+  res.innerHTML = auto.on && auto.n
+    ? `${auto.n} in view · <b class="on">${auto.live} online</b> · ${auto.dead} offline${auto.checking ? ` · ${auto.checking} checking` : ''}`
+    : '';
 }
-const scanUI = scanHud;
 
 $('scanbtn').onclick = () => {
-  if (scan && scan.running) { scan.stop = true; scan.msg = 'stopped'; return; }
-  runScan(inView());
+  auto.on = !auto.on;
+  try { localStorage.setItem('sextant-auto', auto.on ? '1' : '0'); } catch {}
+  scanHud();
+  if (auto.on) refreshStatus();
 };
 
-async function runScan(ships) {
-  if (!ships.length) return;
-  scan = { total: ships.length, done: 0, online: 0, offline: 0, unknown: 0, stop: false, msg: '', running: true };
-  scanHud();
-  let i = 0;
-  const worker = async () => {
-    while (!scan.stop && i < ships.length) {
-      const n = ships[i++];
-      const r = await checkShip(n.ship);
-      if (['no-dns', 'no-our-galaxy', 'no-our-planet'].includes(r)) { scan.stop = true; scan.msg = 'stopped: your own connection is down'; }
-      else applyScan(n, r);
-      scan.done++;
-      scanHud();
-    }
-  };
-  await Promise.all(Array.from({ length: SCAN_PAR }, worker));
-  scan.running = false;
-  legend(); scanHud();
-  listedFor = undefined; listFor(sky.ctx);
+// called after every frame: when the set of ships on screen settles, re-check
+function viewMoved() {
+  if (!auto.on) return;
+  const d = sky.drawn, sig = d.length + ':' + (d[0]?.ship || '') + ':' + (d[d.length - 1]?.ship || '') + ':' + (sky.sel?.ship || '');
+  if (sig === auto.sig) return;
+  auto.sig = sig;
+  clearTimeout(auto.k);
+  auto.k = setTimeout(refreshStatus, 800);
 }
 
-async function checkShip(p) {
+async function refreshStatus() {
+  if (!auto.on || auto.busy || document.hidden || !T || $('explore').hidden) return;
+  const ships = inView();
+  if (sky.sel && !ships.includes(sky.sel)) ships.push(sky.sel);
+  if (!ships.length) { auto.n = 0; scanHud(); return; }
+  auto.busy = true;
   try {
-    const r0 = await fetch(`${API}/ping/${p}`, { method: 'POST', credentials: 'include' });
-    if (!r0.ok) return 'error';
-    const t0 = Date.now();
-    while (Date.now() - t0 < 45000 && !scan.stop) {
-      await new Promise((res) => setTimeout(res, 2000));
-      const r = await get('/ping/' + p);
-      if (r.state === 'complete' && r.at >= t0 - 2000) return r.result;
+    const r = await fetch(API + '/status', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(ships.map((n) => n.ship)),
+    });
+    if (!r.ok) return;
+    const res = await r.json();
+    let live = 0, dead = 0, checking = 0, changed = false;
+    for (const n of ships) {
+      const v = res[n.ship];
+      if (!v) continue;
+      const [st, last, probing] = v;
+      if (n.status !== st || n.last !== last) { n.status = st; n.last = last; prep(n); changed = true; }
+      n.probing = probing;
+      if (st === 'live') live++; else if (st === 'dead') dead++;
+      if (probing) checking++;
     }
-  } catch {}
-  return 'timeout';
+    Object.assign(auto, { n: ships.length, live, dead, checking });
+    if (changed) {
+      sky.dirty = true; kick(); legend();
+      listedFor = undefined; listFor(sky.ctx);
+      const d = panelData, sn = sky.sel;
+      if (d && sn && d.ship === sn.ship && (d.status !== sn.status || d.last !== sn.last)) {
+        d.status = sn.status; d.last = sn.last;
+        const pd = $('pdot'), ps = $('psub');
+        if (pd) pd.innerHTML = dot(d.status);
+        if (ps) ps.innerHTML = panelSub(d);
+      }
+    }
+  } catch {} finally { auto.busy = false; scanHud(); }
 }
-
-function applyScan(n, r) {
-  n.scanned = r;
-  if (r === 'yes' || r === 'no-sponsor-hit') { n.status = 'live'; n.last = Date.now(); scan.online++; }
-  else if (r === 'no-sponsor-miss') { n.status = 'dead'; scan.offline++; }
-  else scan.unknown++;
-  prep(n); sky.dirty = true; kick();
-}
+setInterval(refreshStatus, AUTO_EVERY);
 
 function dive(n) { if (opens(n)) location.hash = '#/' + n.ship; }
 function up() {
@@ -1035,11 +1040,10 @@ async function ping(p) {
 // ---------------------------------------------------------------- list view
 
 const shortAgo = (ms) => (ms ? ago(ms).replace(' ago', '') : '');
-const scanWord = { yes: 'online', 'no-sponsor-hit': 'online', 'no-sponsor-miss': 'offline' };
 function row(s) {
   const cold = s.life === 0 || (s.life == null && !s.status);
   const pal = s.target && s.leech ? '<span class="pals" title="mutual pal">★</span>' : s.target || s.leech ? '<span class="pals" title="pal">☆</span>' : '';
-  const meta = s.life === 0 ? 'no keys' : s.status === 'live' && s.last ? shortAgo(s.last) : scanWord[s.scanned] || (s.kind === 'star' && s.n ? s.n.toLocaleString() + 'p' : '');
+  const meta = s.life === 0 ? 'no keys' : (s.status === 'live' || s.status === 'stale') && s.last ? shortAgo(s.last) : (s.kind === 'star' && s.n ? s.n.toLocaleString() + 'p' : '');
   return `<a class="row${cold ? ' cold' : ''}${s.adopted ? ' adopted' : ''}" href="#/${esc(s.ship)}" data-ship="${esc(s.ship)}" title="${esc(s.ship)}${s.adopted ? ' · adopted from ' + esc(s.origin) : ''}">${dot(s.status)}<span class="nm">${esc(s.ship)}</span>${pal}<span class="meta">${esc(meta)}</span></a>`;
 }
 

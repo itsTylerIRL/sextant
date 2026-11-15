@@ -1,7 +1,7 @@
 :root {
   --bg: #0d1219; --panel: #141b25; --line: #233041; --ink: #d8e1ec;
   --muted: #7d8ba0; --accent: #e3b45c; --live: #4fd18b; --dead: #e0605a;
-  --unborn: #6c8fd6; --none: #3a4658;
+  --unborn: #6c8fd6; --stale: #4b7a66; --none: #3a4658;
   --sky-bg: #080c13; --sky-ring: #1b2534; --sky-slot: #263246; --sky-dust: #9fb2cc;
   --sky-keyed: #c9d6e8; --sky-cold: #56637a;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
@@ -9,7 +9,7 @@
 @media (prefers-color-scheme: light) {
   :root { --bg: #f5f2ea; --panel: #fffdf8; --line: #dcd5c6; --ink: #1d2430;
           --muted: #6b6f78; --accent: #a8741a; --none: #c9c2b2;
-          --live: #1f9a5c; --dead: #c8443d; --unborn: #3f66b8;
+          --live: #1f9a5c; --dead: #c8443d; --unborn: #3f66b8; --stale: #8fb3a0;
           --sky-bg: #f1ebdc; --sky-ring: #d6cbb2; --sky-slot: #cfc3a8; --sky-dust: #b9ad92;
           --sky-keyed: #2c3441; --sky-cold: #a39a86; }
 }
@@ -46,6 +46,7 @@ main { flex: 1; padding: 14px 20px 24px; display: flex; flex-direction: column; 
 .dot.live { background: var(--live); box-shadow: 0 0 6px var(--live); }
 .dot.dead { background: var(--dead); }
 .dot.unborn { background: var(--unborn); }
+.dot.stale { background: var(--stale); }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

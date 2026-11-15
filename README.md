@@ -47,7 +47,7 @@ Click any ship to select it. Click it again to zoom in.
 
 - **Search** suggests galaxies, stars, loaded planets, your pals and your peers as you type.
 - The **peers** layer keeps only the ships your ship has talked to, plus the galaxies and stars they live under.
-- **Scan in view** runs a `%vitals` check on the booted ships currently on screen, six at a time, and paints the results as they arrive. Nothing keeps a global list of who is online: your ship only knows about ships it has exchanged packets with, so a scan is the honest way to find out. It sends traffic to those ships, so it only runs when you click it.
+- **Live status.** Ames only updates what it knows about a ship when packets flow, and it marks any idle peer "dead" after 30 seconds of quiet, so its view alone goes stale. Sextant probes instead: while the map is open, every booted ship on screen (and your pals and the galaxies, every 5 minutes) gets one tiny poke to its `%ping` agent, which every ship runs and which silently acks. A ship that answered in the last 15 minutes is **online**; one that hasn't answered a probe within 45 seconds is **offline**; anything older is **not heard lately**. Each ship is probed at most every 5 minutes, and the **Live status** button on the map pauses it.
 
 ![search and the peers layer](docs/screenshots/search.png)
 
@@ -71,7 +71,7 @@ By default only you (logged in) can see your Sextant. To let anyone view it read
 :sextant [%public &]
 ```
 
-Adding pals, connection checks, scans, app lookups and installs always need the owner's login.
+Adding pals, connection checks, probes, app lookups and installs always need the owner's login.
 
 ## How it works
 

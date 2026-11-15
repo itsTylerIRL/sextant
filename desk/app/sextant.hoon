@@ -8,18 +8,42 @@
 ::      %pals     targets / leeches / mutuals, if installed
 ::      %vitals   active connectivity checks, if landscape is installed
 ::
+::    ames only updates its view of a peer when packets flow, so on its
+::    own it goes stale: a ship we last heard from two weeks ago reads
+::    %dead forever.  we keep it fresh by probing: a %noun poke to the
+::    other ship's %ping agent (on %base, so every ship has it) which
+::    acks foreign pokes and does nothing else.  ack or nack, any answer
+::    means they're up.  see +status for how the evidence is weighed.
+::
 ::    moons are not on azimuth, so we only know the moons our ship has
 ::    talked to (or our own, via jael).
 ::
 /-  vitals, docket
 /+  default-agent, dbug, server
 |%
-+$  versioned-state  $%(state-0 state-1)
++$  versioned-state  $%(state-0 state-1 state-2)
 +$  state-0  [%0 public=?]
 ::  tree: cached /api/tree body, rebuilt by a behn timer; not persisted
 ::  next: when that timer fires, so a reload can cancel it
 ::
 +$  state-1  [%1 public=? next=(unit @da) tree=(unit octs)]
+::  probes: when we last poked a ship's %ping, and when it last answered.
+::  sent > got means a probe is still out.
+::
++$  state-2
+  $:  %2
+      public=?
+      next=(unit @da)
+      tree=(unit octs)
+      probes=(map ship probe)
+  ==
++$  probe  [sent=@da got=@da]
+::  how fresh is fresh
+::
+++  fresh     ~m15  ::  heard from this recently: live
+++  patience  ~s45  ::  probe unanswered this long: offline
+++  recheck   ~m5   ::  don't probe a ship heard from this recently
+++  giveup    ~h1   ::  resend a probe unanswered this long
 +$  card  card:agent:gall
 ::  mirror of point:naive, so we don't need to vendor lib/naive
 ::
@@ -43,7 +67,7 @@
 +$  naive-state  [%0 =points operators=* dns=(list @t)]
 +$  sponsors  (map ship [residents=(set ship) requests=(set ship)])
 +$  known     (map ship ?(%alien %known))
-+$  qos       [kind=?(%live %dead %unborn) last=@da]
++$  qos       [kind=?(%live %dead %unborn %stale) last=@da]
 ::  mirrors of %pals types (sur/pals.hoon on the %pals desk)
 +$  pal-command
   $%  [%meet =ship in=(set @ta)]
@@ -77,7 +101,7 @@
 --
 ::
 %-  agent:dbug
-=|  state-1
+=|  state-2
 =*  state  -
 ^-  agent:gall
 =<
@@ -98,10 +122,11 @@
   |=  old-vase=vase
   ^-  (quip card _this)
   =/  old  !<(versioned-state old-vase)
-  =/  new=state-1
+  =/  new=state-2
     ?-  -.old
-      %0  [%1 public.old ~ ~]
-      %1  old(tree ~)
+      %0  [%2 public.old ~ ~ ~]
+      %1  [%2 public.old next.old ~ ~]
+      %2  old(tree ~)
     ==
   ::  replace any pending timer with one that rebuilds the cache now
   ::
@@ -126,11 +151,27 @@
   ::
       %handle-http-request
     =+  !<([eyre-id=@ta req=inbound-request:eyre] vase)
+    =/  site  site:(parse-request-line:server url.request.req)
+    ::  POST /api/status ["~zod", ...]: status for a batch of ships.
+    ::  for the owner it also probes the ones we haven't heard from lately
+    ::
+    ?:  ?&  =(~['apps' 'sextant' 'api' 'status'] site)
+            ?=(%'POST' method.request.req)
+            |(authenticated.req public)
+        ==
+      =/  who=(list ship)  (parse-ships:hc body.request.req)
+      =^  cards  probes
+        ?.  authenticated.req  [~ probes]
+        (send-probes:hc who)
+      :_  this
+      %+  weld  cards
+      %+  give-simple-payload:app:server  eyre-id
+      (json-response:gen:server (statuses:hc who))
     ::  /api/tree is expensive: serve the cached body when we have one
     ::
     ?:  ?&  ?=(^ tree)
             |(authenticated.req public)
-            =(~['apps' 'sextant' 'api' 'tree'] site:(parse-request-line:server url.request.req))
+            =(~['apps' 'sextant' 'api' 'tree'] site)
         ==
       :_  this
       %+  give-simple-payload:app:server  eyre-id
@@ -150,7 +191,10 @@
   ?:  ?=([%tree ~] wire)
     ?>  ?=([%behn %wake *] sign-arvo)
     =/  nex  (add now.bowl ~m5)
-    :-  [%pass /tree %arvo %b %wait nex]~
+    ::  keep our pals and the galaxies fresh without being asked
+    ::
+    =^  cards  probes  (send-probes:hc auto-targets:hc)
+    :-  [[%pass /tree %arvo %b %wait nex] cards]
     this(next `nex, tree `tree-octs:hc)
   ?.  ?=([%eyre %connect ~] wire)  (on-arvo:def wire sign-arvo)
   ?>  ?=([%eyre %bound *] sign-arvo)
@@ -160,6 +204,13 @@
 ++  on-agent
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _this)
+  ?:  ?=([%probe @ ~] wire)
+    ::  ack or nack, they answered
+    ::
+    =/  who  (slaw %p i.t.wire)
+    ?.  &(?=(^ who) ?=(%poke-ack -.sign))  `this
+    =/  p=probe  (~(gut by probes) u.who [now.bowl *@da])
+    `this(probes (~(put by probes) u.who p(got now.bowl)))
   ?.  ?=([?(%ping %pal %ally %install) *] wire)  (on-agent:def wire sign)
   ?.  ?=(%poke-ack -.sign)  `this
   ~?  ?=(^ p.sign)  [dap.bowl %poke-failed wire]
@@ -337,7 +388,7 @@
   ::  where stars/planets count the ships it currently sponsors.
   ::  s: every sponsored star, [name galaxy idx st life rel planets],
   ::  grouped by sponsoring galaxy and sorted by star number.
-  ::  st: 0 never contacted, 1 live, 2 dead, 3 pending.
+  ::  st: 0 never contacted, 1 live, 2 dead, 3 pending, 4 stale.
   ::  life: -1 not on azimuth.  rel: 1 we added them, 2 they added us.
   ::
       [%tree ~]
@@ -432,21 +483,144 @@
     $(a (rsh 3 a), b (rsh 3 b), i +(i))
   (lth c d)
 ::
-::  +status: what ames knows about our connection to .who
+::  +ames-qos: what ames knows about our connection to .who.  a ship
+::  can be in both the mesa (chums) and old-ames (peers) tables, and
+::  only one of them is current, so take whichever heard most recently
+::
+++  ames-qos
+  |=  [who=ship =ctx]
+  ^-  (unit qos)
+  =/  c=(unit qos)
+    ?.  =(`%known (~(get by chums.ctx) who))  ~
+    =/  c  .^(chum-state:ames %ax (bp %$ /chums/(scot %p who)))
+    ?.  ?=(%known -.c)  ~
+    `[-.qos.+.c last-contact.qos.+.c]
+  =/  p=(unit qos)
+    ?.  =(`%known (~(get by peers.ctx) who))  ~
+    =/  s  .^(ship-state:ames %ax (bp %$ /peers/(scot %p who)))
+    ?.  ?=(%known -.s)  ~
+    `[-.qos.+.s last-contact.qos.+.s]
+  ?~  c  p
+  ?~  p  c
+  ?:((gth last.u.p last.u.c) p c)
+::
+::  +heard: when they last provably answered: a probe ack, or a packet
+::  ames received.  ames's last-contact alone isn't proof: it's also
+::  stamped when keys first arrive, before any contact, and survives
+::  ames marking the peer %dead after 30s of quiet.  only %live means
+::  last-contact was a real packet.
+::
+++  heard
+  |=  [a=(unit qos) p=(unit probe)]
+  ^-  @da
+  %+  max  ?~(p *@da got.u.p)
+  ?:(&(?=(^ a) ?=(%live kind.u.a)) last.u.a *@da)
+::
+::  +status: ames plus our probes, weighed by age
+::
+::    %dead:    a probe has gone unanswered past +patience
+::    %live:    they answered within +fresh
+::    %stale:   everything we know is older than that
+::    %unborn:  ames has their keys, nothing more
+::
+::    ames's own %dead is ignored: it marks any idle peer %dead 30s
+::    after the last packet, so it means "quiet", not "offline".
 ::
 ++  status
   |=  [who=ship =ctx]
   ^-  (unit qos)
   ?:  =(who our.bowl)  `[%live now.bowl]
-  ?:  =(`%known (~(get by chums.ctx) who))
-    =/  c  .^(chum-state:ames %ax (bp %$ /chums/(scot %p who)))
-    ?.  ?=(%known -.c)  ~
-    `[-.qos.+.c last-contact.qos.+.c]
-  ?:  =(`%known (~(get by peers.ctx) who))
-    =/  s  .^(ship-state:ames %ax (bp %$ /peers/(scot %p who)))
-    ?.  ?=(%known -.s)  ~
-    `[-.qos.+.s last-contact.qos.+.s]
-  ~
+  =/  a  (ames-qos who ctx)
+  =/  p  (~(get by probes) who)
+  =/  h  (heard a p)
+  ?:  ?&  ?=(^ p)
+          (gth sent.u.p h)
+          (lth sent.u.p (sub now.bowl patience))
+      ==
+    `[%dead h]
+  ?:  (gth h (sub now.bowl fresh))  `[%live h]
+  ?~  a  ?~(p ~ `[%stale h])
+  ?:  &(?=(~ p) ?=(%unborn kind.u.a))  a
+  `[%stale (max h last.u.a)]
+::
+::  +want-probe: is it worth poking .who to find out?
+::
+++  want-probe
+  |=  [who=ship =ctx p=(unit probe)]
+  ^-  ?
+  ?:  =(who our.bowl)  |
+  ?:  (gth (heard (ames-qos who ctx) p) (sub now.bowl recheck))  |
+  ?~  p  &
+  ::  one already out: ames retries it, so just wait (within reason)
+  ::
+  ?.  (gth sent.u.p got.u.p)  &
+  (lth sent.u.p (sub now.bowl giveup))
+::
+::  +send-probes: poke %ping on each ship that needs it
+::
+++  send-probes
+  |=  who=(list ship)
+  ^-  (quip card (map ship probe))
+  =/  =ctx  get-ctx
+  =/  ps  probes
+  =|  cards=(list card)
+  |-
+  ?~  who  [cards ps]
+  =*  w  i.who
+  =/  p  (~(get by ps) w)
+  ?.  (want-probe w ctx p)  $(who t.who)
+  %=  $
+    who    t.who
+    ps     (~(put by ps) w [now.bowl ?~(p *@da got.u.p)])
+    cards  [[%pass /probe/(scot %p w) %agent [w %ping] %poke %noun !>(~)] cards]
+  ==
+::
+::  +auto-targets: who the timer keeps fresh: booted galaxies and pals
+::
+++  auto-targets
+  ^-  (list ship)
+  =/  pos  points:nas
+  =/  gals=(list ship)
+    %+  skim  (turn (gulf 0 255) |=(a=@ `@p`a))
+    |=  g=@p
+    =/  pin  (get-point pos g)
+    &(?=(^ pin) (gth life.keys.net.u.pin 0))
+  ?.  (running %pals)  gals
+  =/  =ctx  get-ctx
+  ?~  pals.ctx  gals
+  (weld gals ~(tap in (~(uni in targets.u.pals.ctx) leeches.u.pals.ctx)))
+::
+::  +parse-ships: a json array of @p strings, deduped, at most 1.000
+::
+++  parse-ships
+  |=  body=(unit octs)
+  ^-  (list ship)
+  ?~  body  ~
+  =/  j  (de:json:html `@t`q.u.body)
+  ?~  j  ~
+  =/  l  ((ar:dejs-soft:format so:dejs-soft:format) u.j)
+  ?~  l  ~
+  (scag 1.000 ~(tap in (silt (murn u.l (cury slaw %p)))))
+::
+::  +statuses: {"~zod": [status, last, probing], ...}
+::
+++  statuses
+  |=  who=(list ship)
+  ^-  json
+  =/  =ctx  get-ctx
+  :-  %o
+  %-  malt
+  %+  turn  who
+  |=  w=ship
+  ^-  [@t json]
+  =/  q  (status w ctx)
+  =/  p  (~(get by probes) w)
+  :-  (scot %p w)
+  :-  %a
+  :~  ?~(q ~ s+kind.u.q)
+      ?~(q ~ ?:(=(*@da last.u.q) ~ (time:enjs:format last.u.q)))
+      b+?~(p | (gth sent.u.p got.u.p))
+  ==
 ::
 ::  json
 ::
@@ -513,6 +687,7 @@
       %live    1
       %dead    2
       %unborn  3
+      %stale   4
     ==
   =/  life=json  ?~(pin (numb 0) (numb life.keys.net.u.pin))
   =/  rel=@ud
