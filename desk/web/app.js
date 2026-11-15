@@ -444,16 +444,59 @@ const rgba = (hex, a) => {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
   return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})` : `rgba(127,127,127,${a})`;
 };
-const scanning = () => auto.on && auto.checking > 0;
+// results wait here until the sweep line passes over their ship, so the
+// map changes colour in the line's wake
+const held = new Map(); // node -> { st, last, t }
+let sweepPrev = null, listAt = 0;
+const scanning = () => auto.on && (auto.checking > 0 || held.size > 0);
 
-// sweep around the galaxy or star in view (the whole network when zoomed out)
-function drawSweep(c, now) {
+// the sweep turns around the galaxy or star in view (the whole network
+// when zoomed out)
+function sweepGeom(now) {
   const k = pxScale(), n = sky.ctx;
   let cx, cy, R;
   if (n && sky.drawn.includes(n)) { cx = n.sx; cy = n.sy; R = n.R * k; }
   else { [cx, cy] = toScreen(0, 0); R = 1.05 * k; }
-  R = Math.min(R, Math.hypot(sky.w, sky.h));
-  const a = ((now / 2400) * TAU) % TAU, span = 1.2, col = P.live;
+  return { cx, cy, R: Math.min(R, Math.hypot(sky.w, sky.h)), a: ((now / 2400) * TAU) % TAU };
+}
+
+function applyResult(n, r) {
+  n.status = r.st; n.last = r.last; prep(n);
+  if (!reduceMotion) blips.push({ n, t: performance.now() });
+  const d = panelData;
+  if (d && d.ship === n.ship && (d.status !== n.status || d.last !== n.last)) {
+    d.status = n.status; d.last = n.last;
+    const pd = $('pdot'), ps = $('psub');
+    if (pd) pd.innerHTML = dot(d.status);
+    if (ps) ps.innerHTML = panelSub(d);
+  }
+}
+// after a batch lands: redraw the sky now, the legend and list at most
+// once a second (they're heavier and don't need every frame)
+function afterApply(force) {
+  sky.dirty = true; kick();
+  const t = performance.now();
+  if (force || t - listAt > 1000) { listAt = t; legend(); listedFor = undefined; listFor(sky.ctx); }
+}
+
+// reveal every held result whose ship the line crossed since last frame
+function reveal(g, now) {
+  const from = sweepPrev ?? g.a;
+  sweepPrev = g.a;
+  if (!held.size) return;
+  const swept = (g.a - from + TAU) % TAU;
+  let any = false;
+  for (const [n, r] of held) {
+    const dx = n.sx - g.cx, dy = n.sy - g.cy;
+    let hit = now - r.t > 3000 || !sky.drawn.includes(n) || Math.hypot(dx, dy) > g.R + 4;
+    if (!hit) hit = (g.a - Math.atan2(dy, dx) + 2 * TAU) % TAU <= swept;
+    if (hit) { held.delete(n); applyResult(n, r); any = true; }
+  }
+  if (any) afterApply(!held.size);
+}
+
+function drawSweep(c, now) {
+  const g = sweepGeom(now), { cx, cy, R, a } = g, span = 1.2, col = P.live;
   if (c.createConicGradient) {
     const g = c.createConicGradient(a - span, cx, cy);
     g.addColorStop(0, rgba(col, 0));
@@ -464,6 +507,7 @@ function drawSweep(c, now) {
   c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, R, a - span, a); c.closePath(); c.fill();
   c.strokeStyle = rgba(col, 0.55); c.lineWidth = 1.2;
   c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R); c.stroke();
+  reveal(g, now);
 }
 
 // a ring that flares out from a ship when its answer (or silence) comes in
@@ -527,7 +571,7 @@ function draw(now) {
   c.drawImage(sky.base, 0, 0);
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   let loop = !!sky.fly || sky.dirty;
-  if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; }
+  if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; } else sweepPrev = null;
   if (blips.length) { drawBlips(c, now); loop = true; }
   if (!sky.fly) {
     const live = sky.drawn.filter((n) => n.c === 'live' && matches(n));
@@ -958,6 +1002,7 @@ function scanHud() {
 $('scanbtn').onclick = () => {
   auto.on = !auto.on;
   try { localStorage.setItem('sextant-auto', auto.on ? '1' : '0'); } catch {}
+  if (!auto.on && held.size) { for (const [n, r] of held) applyResult(n, r); held.clear(); afterApply(true); }
   scanHud();
   if (auto.on) refreshStatus();
 };
@@ -985,32 +1030,26 @@ async function refreshStatus() {
     });
     if (!r.ok) return;
     const res = await r.json();
-    let live = 0, dead = 0, checking = 0, changed = false;
+    let live = 0, dead = 0, checking = 0, now = false;
+    const t = performance.now();
     for (const n of ships) {
       const v = res[n.ship];
       if (!v) continue;
       const [st, last, probing] = v;
-      const moved = n.status !== st, answered = n.probing && !probing;
+      const h = held.get(n), was = h ? h.st : n.status, wasLast = h ? h.last : n.last;
+      const moved = was !== st || wasLast !== last, answered = n.probing && !probing;
       seen.set(n.ship, { status: st, last, t: Date.now() });
-      if (moved || n.last !== last) { n.status = st; n.last = last; prep(n); changed = true; }
-      if ((moved || answered) && !reduceMotion) blips.push({ n, t: performance.now() });
       n.probing = probing;
       if (st === 'live') live++; else if (st === 'dead') dead++;
       if (probing) checking++;
+      if (!moved && !answered) continue;
+      // hand it to the sweep, unless there's no sweep to wait for
+      if (reduceMotion) { applyResult(n, { st, last }); now = true; }
+      else held.set(n, { st, last, t: h ? h.t : t });
     }
     Object.assign(auto, { n: ships.length, live, dead, checking });
-    if (blips.length || checking) kick();
-    if (changed) {
-      sky.dirty = true; kick(); legend();
-      listedFor = undefined; listFor(sky.ctx);
-      const d = panelData, sn = sky.sel;
-      if (d && sn && d.ship === sn.ship && (d.status !== sn.status || d.last !== sn.last)) {
-        d.status = sn.status; d.last = sn.last;
-        const pd = $('pdot'), ps = $('psub');
-        if (pd) pd.innerHTML = dot(d.status);
-        if (ps) ps.innerHTML = panelSub(d);
-      }
-    }
+    if (now) afterApply(true);
+    if (held.size || checking) kick();
   } catch {} finally { auto.busy = false; scanHud(); }
 }
 // poll quickly while answers are pending, slowly otherwise
