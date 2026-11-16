@@ -342,6 +342,27 @@
       %+  weld  cards
       %+  give-simple-payload:app:server  eyre-id
       (json-response:gen:server (trace-json:hc u.who))
+    ::  POST /api/recheck ["~zod", ...]: probe these now, even if they were
+    ::  checked lately or are backing off, but still at most +max-out out at
+    ::  once.  answers the ships it actually sent, so the rest can wait a turn
+    ::
+    ?:  ?&  =(~['apps' 'sextant' 'api' 'recheck'] site)
+            ?=(%'POST' method.request.req)
+            authenticated.req
+        ==
+      =/  who=(list ship)  (parse-ships:hc body.request.req)
+      =/  before  probes
+      =^  cards  probes  (probe-many:hc who & &)
+      =/  sent=(list ship)
+        %+  skim  who
+        |=  w=ship
+        =/  a  (~(get by before) w)
+        =/  b  (~(get by probes) w)
+        &(?=(^ b) |(?=(~ a) !=(sent.u.a sent.u.b)))
+      :_  this
+      %+  weld  cards
+      %+  give-simple-payload:app:server  eyre-id
+      (json-response:gen:server a+(turn sent |=(w=ship s+(scot %p w))))
     ::  POST /api/status ["~zod", ...]: status for a batch of ships.
     ::  for the owner it also probes the ones we haven't heard from lately
     ::
@@ -584,6 +605,19 @@
               %poke  %ally-update-0  !>(`ally-diff`[%add u.who])
           ==
       (give [[204 ~] ~])
+    ?:  ?=([%uninstall @ ~] t.site)
+      ::  uninstall one of our desks (owner only, POST); never %base or
+      ::  sextant itself, which would pull the page out from under us
+      ::
+      =*  d  i.t.t.site
+      ?.  ((sane %tas) d)  (give [[400 ~] ~])
+      ?.  authed  (give [[403 ~] ~])
+      ?:  get  (give [[405 ~] ~])
+      ?:  |(=(%base d) =(q.byk.bowl d))  (give [[409 ~] ~])
+      :-  :*  %pass  /install/uninstall/[d]  %agent  [our.bowl %hood]
+              %poke  %kiln-uninstall  !>(`desk`d)
+          ==
+      (give [[204 ~] ~])
     ?:  ?=([%install @ @ ~] t.site)
       ::  install a desk a ship publishes (owner only, POST)
       ::
@@ -592,9 +626,22 @@
       ?.  &(?=(^ who) ((sane %tas) d))  (give [[400 ~] ~])
       ?.  authed  (give [[403 ~] ~])
       ?:  get  (give [[405 ~] ~])
-      :-  :*  %pass  /install/(scot %p u.who)/[d]  %agent  [our.bowl %hood]
-              %poke  %kiln-install  !>([`desk`d `ship`u.who `desk`d])
-          ==
+      ::  a desk we uninstalled is still here, suspended; kiln won't wake
+      ::  it for an identical remote, so revive it too (as Landscape does)
+      ::
+      =/  pk  .^((map desk pike) %gx (bp %hood /kiln/pikes/kiln-pikes))
+      =/  old  (~(get by pk) d)
+      =/  wake=(list card)
+        ?.  &(?=(^ old) !?=(%live zest.u.old))  ~
+        :~  :*  %pass  /install/revive/[d]  %agent  [our.bowl %hood]
+                %poke  %kiln-revive  !>(`desk`d)
+        ==  ==
+      %+  weld
+        ^-  (list card)
+        :-  :*  %pass  /install/(scot %p u.who)/[d]  %agent  [our.bowl %hood]
+                %poke  %kiln-install  !>([`desk`d `ship`u.who `desk`d])
+            ==
+        wake
       (give [[204 ~] ~])
     ?.  get  (give [[405 ~] ~])
     =/  res=(unit json)  (api t.site)
@@ -878,16 +925,22 @@
 ::
 ++  probe-ships
   |=  [who=(list ship) force=?]
+  (probe-many who force !force)
+::
+::  +probe-many: .skip ignores +want-probe's waits; .cap keeps +max-out
+::
+++  probe-many
+  |=  [who=(list ship) skip=? cap=?]
   ^-  (quip card (map ship probe))
   =/  ps  probes
   =/  out=@ud  (lent (skim ~(val by ps) |=(p=probe (in-flight `p))))
   =|  cards=(list card)
   |-
   ?~  who  [cards ps]
-  ?:  &(!force (gte out max-out))  [cards ps]
+  ?:  &(cap (gte out max-out))  [cards ps]
   =*  w  i.who
   =/  p  (~(get by ps) w)
-  ?.  ?:  force  &(!=(w our.bowl) !(in-flight p))
+  ?.  ?:  skip  &(!=(w our.bowl) !(in-flight p))
       (want-probe w p)
     $(who t.who)
   =/  wir  /(scot %p w)/(scot %da now.bowl)
@@ -978,7 +1031,7 @@
   =/  ts=(list [[@p @tas] treaty])
     ?.  ?=(%ini -.tu)  ~
     ~(tap by init.tu)
-  =/  have  .^((set @tas) %cd (bp %$ ~))
+  =/  have  have-map
   %-  pairs
   :~  treaty+b+&
       allied+b+?=(^ ali)
@@ -989,7 +1042,7 @@
 ::  +app-json: one published app, as its docket describes it
 ::
 ++  app-json
-  |=  [s=@p d=@tas t=treaty have=(set @tas)]
+  |=  [s=@p d=@tas t=treaty have=(map @tas @t)]
   ^-  json
   =,  enjs:format
   =/  k  docket.t
@@ -1003,7 +1056,8 @@
       version+s+(crip "{(scow %ud major.version.k)}.{(scow %ud minor.version.k)}.{(scow %ud patch.version.k)}")
       website+s+website.k
       license+s+license.k
-      installed+b+(~(has in have) d)
+      installed+b+(~(has by have) d)
+      launch+(launch-json have d)
   ==
 ::
 ::  +catalog-json: every app our ship knows is published anywhere, and
@@ -1017,7 +1071,7 @@
   =/  als=(list [@p (set [@p @tas])])  ?.(?=(%ini -.al) ~ ~(tap by init.al))
   =/  tu  .^(treaty-update %gx (bp %treaty /treaties/treaty-update-0))
   =/  ts=(list [[@p @tas] treaty])  ?.(?=(%ini -.tu) ~ ~(tap by init.tu))
-  =/  have  .^((set @tas) %cd (bp %$ ~))
+  =/  have  have-map
   %-  pairs
   :~  treaty+b+&
       :-  %allies
@@ -1091,6 +1145,7 @@
       target+?~(pals.ctx ~ b+(~(has in targets.u.pals.ctx) who))
       leech+?~(pals.ctx ~ b+(~(has in leeches.u.pals.ctx) who))
       watched+b+(~(has in watch) who)
+      checked+=/(p (~(get by probes) who) ?~(p ~ ?:(=(*@da sent.u.p) ~ (time sent.u.p))))
   ==
 ::
 ++  detail-json
@@ -1117,6 +1172,40 @@
       =/  a  (~(get by receipts.rec) who)
       ?~(a ~ b+u.a)
   ==
+::
+::  +have-map: desks that are installed and running (kiln zest %live),
+::  each with the url its tile opens ('' if it has no ready tile).
+::  an uninstalled desk stays in %cd, so that scry can't tell us this.
+::
+++  have-map
+  ^-  (map @tas @t)
+  =/  pk  .^((map desk pike) %gx (bp %hood /kiln/pikes/kiln-pikes))
+  =/  ch=(map desk charge:docket)
+    ?.  (running %docket)  ~
+    =/  u  .^(charge-update:docket %gx (bp %docket /charges/charge-update))
+    ?.(?=(%initial -.u) ~ initial.u)
+  %-  ~(gas by *(map @tas @t))
+  %+  murn  ~(tap by pk)
+  |=  [d=desk p=pike]
+  ^-  (unit [@tas @t])
+  ?.  ?=(%live zest.p)  ~
+  =/  c  (~(get by ch) d)
+  ?~  c  `[d '']
+  ?.  ?=(?(%glob %site) -.chad.u.c)  `[d '']
+  =*  h  href.docket.u.c
+  :+  ~  d
+  ?-  -.h
+    %glob  (crip "/apps/{(trip base.h)}/")
+    %site  (spat path.h)
+  ==
+::
+++  launch-json
+  |=  [have=(map @tas @t) d=@tas]
+  ^-  json
+  =/  u  (~(get by have) d)
+  ?~  u  ~
+  ?:  =('' u.u)  ~
+  s+u.u
 ::
 ::  +my-installs: apps we run that kiln syncs from a publisher, with
 ::  their dockets.  like %hits, desks with no publisher (|new-desk,
@@ -1209,7 +1298,7 @@
 ::  +hits-json: per app, installs heard of and when (for trending)
 ::
 ++  hits-json
-  |=  have=(set @tas)
+  |=  have=(map @tas @t)
   ^-  json
   :-  %a
   %+  murn  ~(tap by hits)
@@ -1229,7 +1318,8 @@
       n+(numb (lent ons))
       at+a+(turn (scag 200 `(list @da)`ons) time)
       mine+b+(~(has by mine) [pub dk])
-      installed+b+(~(has in have) dk)
+      installed+b+(~(has by have) dk)
+      launch+(launch-json have dk)
       title+s+?:(=('' title.c) dk title.c)
       info+s+info.c
       color+s+(crip ((x-co:co 6) color.c))

@@ -602,7 +602,8 @@ function draw(now) {
   if (!reduceMotion && scanning()) { drawSweep(c, now); loop = true; } else sweepPrev = null;
   if (blips.length) { drawBlips(c, now); loop = true; }
   if (trace && T) { drawTrace(c, now); loop = true; }
-  if (T && !sky.fly) { drawEscapes(c); drawWatched(c); }
+  if (T) drawEscapes(c);
+  if (T && !sky.fly) drawWatched(c);
   if (glides.length) { drawGlides(c, now); loop = true; }
   if (!sky.fly) {
     const live = sky.drawn.filter((n) => n.c === 'live' && matches(n));
@@ -939,11 +940,23 @@ function appCard(a, withShip = false, rank = 0) {
   const via = a.heard ? '<span class="muted" title="known only through pals, not through a publisher you follow"> · via pals</span>' : '';
   return `<div class="app">${rank ? `<span class="rank">${rank}</span>` : ''}${icon}<div class="appbody"><div class="apptitle"><b>${esc(a.title || a.desk)}</b><span class="muted">%${esc(a.desk)} · ${esc(a.version)}${by}${via}</span></div>
     ${a.info ? `<div class="appinfo">${esc(a.info)}</div>` : ''}</div>
-    <div class="appside">${pop}${a.installed ? '<span class="badge">installed</span>' : `<button class="appinstall" data-ship="${esc(a.ship || '')}" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div></div>`;
+    <div class="appside">${pop}${a.installed ? installedBtns(a) : `<button class="appinstall" data-ship="${esc(a.ship || '')}" data-desk="${esc(a.desk)}" data-title="${esc(a.title || a.desk)}">Install</button>`}</div></div>`;
+}
+// an installed app: launch it inside sextant, or uninstall it
+const SELF = 'sextant';
+function installedBtns(a) {
+  const t = esc(a.title || a.desk), d = esc(a.desk);
+  if (a.desk === SELF) return '<span class="badge">installed · you are here</span>';
+  const launch = a.launch && /^\/[^/]/.test(a.launch)
+    ? `<button class="applaunch" data-url="${esc(a.launch)}" data-title="${t}">Launch</button>` : '<span class="badge">installed</span>';
+  const un = a.desk === 'base' ? '' : `<button class="appuninstall" data-desk="${d}" data-title="${t}" title="uninstall %${d}">Uninstall</button>`;
+  return `<div class="appbtns">${launch}${un}</div>`;
 }
 // install buttons, and icons that fail to load fall back to a lettered tile
 function wireApps(el, ship) {
   el.querySelectorAll('.appinstall').forEach((b) => (b.onclick = () => installApp(ship || b.dataset.ship, b)));
+  el.querySelectorAll('.applaunch').forEach((b) => (b.onclick = () => launchApp(b.dataset.url, b.dataset.title)));
+  el.querySelectorAll('.appuninstall').forEach((b) => (b.onclick = () => uninstallApp(b)));
   el.querySelectorAll('.app img').forEach((im) => (im.onerror = () => {
     const t = document.createElement('span');
     t.className = 'appicon'; t.style.background = im.style.background;
@@ -958,6 +971,69 @@ async function installApp(ship, b) {
   const r = await fetch(`${API}/install/${ship}/${encodeURIComponent(desk)}`, { method: 'POST', credentials: 'include' }).catch(() => null);
   b.textContent = r && r.ok ? 'started · see Landscape' : r && r.status === 403 ? 'log in first' : 'failed';
 }
+async function uninstallApp(b) {
+  const desk = b.dataset.desk;
+  if (!confirm(`Uninstall "${b.dataset.title}" (%${desk})?\n\nIts agents stop and it stops syncing from its publisher. Its data stays on your ship, so reinstalling brings it back.`)) return;
+  b.disabled = true; b.textContent = 'uninstalling…';
+  const r = await fetch(`${API}/uninstall/${encodeURIComponent(desk)}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+  if (!r || !r.ok) { b.textContent = r && r.status === 403 ? 'log in first' : 'failed'; return; }
+  b.textContent = 'uninstalled';
+  b.parentElement.querySelector('.applaunch')?.remove();
+  // the catalog reflects it once kiln has suspended the desk
+  setTimeout(() => { if (location.hash === '#/apps') appsView(); else if (panelFor) loadApps(panelFor); }, 2500);
+}
+
+// installed apps open in frames under sextant's top bar, each with a tab in
+// the strip beside Network/Pals/Apps. Several can be open at once; they stay
+// loaded while hidden. The strip fills up, tabs shrink, then it scrolls.
+// Closing the one in view goes back to where it was opened from.
+const LAUNCHED = new Map();   // url -> { title, frame, tab, back }
+const appHash = (url) => '#/app/' + encodeURIComponent(url);
+function launchApp(url, title) {
+  if (!LAUNCHED.has(url)) {
+    const back = location.hash && !location.hash.startsWith('#/app/') ? location.hash : '#/apps';
+    const w = document.createElement('div');
+    w.className = 'appframe'; w.hidden = true; w.setAttribute('role', 'region'); w.setAttribute('aria-label', title);
+    w.innerHTML = `<div class="afbar"><b>${esc(title)}</b><span class="muted">${esc(url)}</span>
+      <a href="${esc(url)}" target="_blank" rel="noopener" title="open in a new tab">new tab ↗</a>
+      <button class="afclose" title="close (Esc)">✕ close</button></div>
+      <iframe src="${esc(url)}" title="${esc(title)}"></iframe>`;
+    document.body.appendChild(w);
+    const t = document.createElement('a');
+    t.href = appHash(url); t.className = 'apptab'; t.title = title;
+    t.innerHTML = `<span>${esc(title)}</span><button class="afx" aria-label="close ${esc(title)}" title="close">✕</button>`;
+    $('apptabs').appendChild(t);
+    const x = (e) => { e.preventDefault(); e.stopPropagation(); closeApp(url); };
+    w.querySelector('.afclose').onclick = x; t.querySelector('.afx').onclick = x;
+    LAUNCHED.set(url, { title, frame: w, tab: t, back });
+  }
+  const h = appHash(url);
+  if (location.hash === h) route(); else location.hash = h;
+}
+function closeApp(url) {
+  const a = LAUNCHED.get(url);
+  if (!a) return;
+  a.frame.remove(); a.tab.remove(); LAUNCHED.delete(url);
+  if (location.hash === appHash(url)) location.hash = a.back;
+}
+// show one app (or none) and light its tab
+function showApp(url) {
+  for (const [u, a] of LAUNCHED) { a.frame.hidden = u !== url; a.tab.classList.toggle('on', u === url); }
+  if (url) { placeFrame(); LAUNCHED.get(url)?.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+}
+// frames start below the top bar, whatever height it wraps to
+function placeFrame() { const top = document.querySelector('.top').getBoundingClientRect().bottom + 'px'; for (const a of LAUNCHED.values()) a.frame.style.top = top; }
+addEventListener('resize', placeFrame);
+// a plain mouse wheel scrolls the tab strip sideways
+$('apptabs').addEventListener('wheel', (e) => {
+  const el = e.currentTarget;
+  if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault(); el.scrollLeft += e.deltaY;
+}, { passive: false });
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !location.hash.startsWith('#/app/')) return;
+  e.stopPropagation(); closeApp(decodeURIComponent(location.hash.slice(6)));
+}, true);
 
 // ---------------------------------------------------------------- %pals
 
@@ -1304,6 +1380,7 @@ async function toggleWatch(d, node) {
   if (!WATCHED) WATCHED = new Set();
   add ? WATCHED.add(d.ship) : WATCHED.delete(d.ship);
   b.classList.toggle('on', add); b.textContent = add ? '★ Watching' : '☆ Watch';
+  drawFeed();
   kick();
 }
 
@@ -1316,7 +1393,7 @@ async function pollEvents() {
     }
     evNewest = Math.max(evNewest, newest) || newest;
     EVENTS = ev;
-    if (location.hash === '#/feed') drawFeed();
+    drawFeed();
   } catch {}
 }
 setInterval(() => { if (!document.hidden && me) pollEvents(); }, 60000);
@@ -1360,19 +1437,43 @@ function drawGlides(c, now) {
   }
   c.globalAlpha = 1;
 }
-// pending escape requests: a dashed arc from the ship to where it asked to go
+// pending escape requests: a dashed arc from the ship to where it asked to go.
+// Both ends come from map positions, not from what happens to be drawn this
+// frame, so an arc doesn't blink as discs open, fade, or slide off screen.
+// An end that isn't laid out (a hidden never-booted ship, a planet whose star
+// hasn't loaded) stands in at its host. Short arcs fade out instead of popping.
+let escCache = { size: -1, list: [] };
+function escaping() {
+  if (escCache.size !== T.byName.size) {
+    escCache = { size: T.byName.size, list: [...T.byName.values()].filter((n) => n.escape) };
+  }
+  return escCache.list;
+}
+function anchor(n) {
+  while (n && (n.x == null || n.hidden)) n = n.parentNode;
+  return n;
+}
 function drawEscapes(c) {
+  const list = escaping();
+  if (!list.length) return;
   c.save();
-  c.strokeStyle = P.accent; c.lineWidth = 1.2; c.setLineDash([4, 4]);
-  for (const n of sky.drawn) {
-    if (!n.escape) continue;
-    const h = T.byName.get(n.escape);
-    if (!h || h.x == null) continue;
-    const [a1, b1] = toScreen(h.x, h.y), a0 = n.sx, b0 = n.sy;
+  c.lineWidth = 1.2; c.strokeStyle = P.accent; c.fillStyle = P.accent;
+  for (const n of list) {
+    const from = anchor(n), to = anchor(T.byName.get(n.escape));
+    if (!from || !to || from === to) continue;
+    const [a0, b0] = toScreen(from.x, from.y), [a1, b1] = toScreen(to.x, to.y);
+    const len = Math.hypot(a1 - a0, b1 - b0);
+    const fade = clamp((len - 6) / 40, 0, 1);
+    if (fade <= 0) continue;
     const mx = (a0 + a1) / 2 - (b1 - b0) * 0.2, my = (b0 + b1) / 2 + (a1 - a0) * 0.2;
-    c.globalAlpha = matches(n) ? 0.65 : 0.12;
+    // skip arcs whose box misses the view entirely
+    const x0 = Math.min(a0, a1, mx), x1 = Math.max(a0, a1, mx), y0 = Math.min(b0, b1, my), y1 = Math.max(b0, b1, my);
+    if (x1 < -10 || y1 < -10 || x0 > sky.w + 10 || y0 > sky.h + 10) continue;
+    c.globalAlpha = (matches(n) ? 0.65 : 0.12) * fade;
+    c.setLineDash([4, 4]); c.lineDashOffset = 0;
     c.beginPath(); c.moveTo(a0, b0); c.quadraticCurveTo(mx, my, a1, b1); c.stroke();
-    c.setLineDash([]); c.beginPath(); c.arc(a1, b1, 2.5, 0, TAU); c.fillStyle = P.accent; c.fill(); c.setLineDash([4, 4]);
+    c.setLineDash([]);
+    c.beginPath(); c.arc(a1, b1, 2.5, 0, TAU); c.fill();
   }
   c.restore();
 }
@@ -1394,32 +1495,28 @@ function drawWatched(c) {
   c.globalAlpha = 1;
 }
 
-const feedUi = { kind: null };
-async function feedView() {
-  setTab('feed'); mapMode(false);
-  crumbs.innerHTML = '<b>feed</b><span class="muted crumbnote">azimuth events, and the ships you watch</span>';
-  const [w] = await Promise.all([get('/watch').catch(() => []), pollEvents()]);
-  if (location.hash !== '#/feed') return;
-  WATCHED = new Set(w.map((x) => x.ship));
-  $('view').innerHTML = `<section class="card" id="wl"></section>
-    <section class="card"><div class="lhead"><div class="ltitle"><h2>Azimuth events</h2><span class="count" id="evn"></span></div>
-      <div class="chips" id="evk"></div></div>
-      <div class="evrows" id="evr"></div></section>`;
-  list($('wl'), 'Watching ★', w, 'Not watching any ships. Open a ship and click ☆ Watch to get a Landscape notification when it stops answering, comes back, or changes on Azimuth.');
-  drawFeed();
-}
+// the feed: a card under the ship list on the Network page. Azimuth
+// events (filtered by kind), with the ships we watch along the top.
+const feedUi = { kind: '' };
 function drawFeed() {
-  const el = $('evr');
+  const el = $('feed');
   if (!el) return;
+  if (!$('evr')) {
+    el.innerHTML = `<div class="lhead"><div class="ltitle"><h2>Feed</h2><span class="count" id="evn"></span></div>
+      <select id="evk" aria-label="Event kind"></select></div>
+      <div class="evrows" id="evr"></div>`;
+    $('evk').onchange = (e) => { feedUi.kind = e.target.value; drawFeed(); };
+  }
   const counts = {};
   for (const e of EVENTS) counts[e.what] = (counts[e.what] || 0) + 1;
-  $('evk').innerHTML = [`<button data-k="" class="${feedUi.kind ? '' : 'on'}">all <span>${EVENTS.length}</span></button>`,
-    ...Object.keys(EVNAME).filter((k) => counts[k]).map((k) => `<button data-k="${k}" class="${feedUi.kind === k ? 'on' : ''}">${EVICO[k]} ${EVNAME[k]} <span>${counts[k]}</span></button>`)].join('');
-  $('evk').querySelectorAll('[data-k]').forEach((b) => (b.onclick = () => { feedUi.kind = b.dataset.k || null; drawFeed(); }));
+  $('evk').innerHTML = [`<option value="">all events (${EVENTS.length})</option>`,
+    ...Object.keys(EVNAME).filter((k) => counts[k]).map((k) => `<option value="${k}">${EVICO[k]} ${EVNAME[k]} (${counts[k]})</option>`)].join('');
+  if (feedUi.kind && !counts[feedUi.kind]) feedUi.kind = '';
+  $('evk').value = feedUi.kind;
   const rows = EVENTS.filter((e) => !feedUi.kind || e.what === feedUi.kind);
-  $('evn').textContent = rows.length ? `${rows.length} since this ship started listening` : '';
-  el.innerHTML = rows.length ? rows.slice(0, 300).map((e) => `<a class="evrow${WATCHED?.has(e.ship) ? ' watched' : ''}" href="#/${esc(e.ship)}"><span class="t" title="${esc(new Date(e.at).toLocaleString())}">${esc(ago(e.at))}</span><span class="evico">${EVICO[e.what] || '•'}</span><span>${evLine(e)}</span></a>`).join('')
-    : '<div class="evnote muted">Nothing yet. Sextant starts listening to %azimuth when it is installed, and new breaches, first boots, key changes, escapes and transfers show up here (and pop up on the map) as they happen.</div>';
+  $('evn').textContent = rows.length ? `${rows.length}` : '';
+  $('evr').innerHTML = rows.length ? rows.slice(0, 300).map((e) => `<a class="evrow${WATCHED?.has(e.ship) ? ' watched' : ''}" href="#/${esc(e.ship)}"><span class="t" title="${esc(new Date(e.at).toLocaleString())}">${esc(ago(e.at))}</span><span class="evico">${EVICO[e.what] || '•'}</span><span>${evLine(e)}</span></a>`).join('')
+    : '<div class="evnote muted">Nothing yet. Breaches, first boots, key changes, escapes and transfers show up here (and pop up on the map) as they happen.</div>';
 }
 
 async function ownerView(addr) {
@@ -1458,7 +1555,8 @@ function row(s) {
   return `<a class="row${cold ? ' cold' : ''}${s.adopted ? ' adopted' : ''}" href="#/${esc(s.ship)}" data-ship="${esc(s.ship)}" title="${esc(s.ship)}${s.adopted ? ' · adopted from ' + esc(s.origin) : ''}">${dot(s.status)}<span class="nm">${esc(s.ship)}</span>${pal}<span class="meta">${esc(meta)}</span></a>`;
 }
 
-function list(el, title, ships, emptyMsg) {
+// .extra: optional controls for the header ({ html, wire(el) }), kept across redraws
+function list(el, title, ships, emptyMsg, extra = null) {
   const filters = { all: () => true, live: (s) => s.status === 'live', booted: (s) => s.life > 0, pals: (s) => s.target || s.leech };
   let mode = 'all', cap = RENDER_CAP;
   const draw = () => {
@@ -1466,7 +1564,8 @@ function list(el, title, ships, emptyMsg) {
     const live = ships.filter(filters.live).length;
     el.innerHTML = `
       <div class="lhead">
-        <div class="ltitle"><h2>${esc(title)}</h2><span class="count">${rows.length.toLocaleString()}${live ? ` · <b class="on">${live} live</b>` : ''}</span></div>
+        <div class="${extra ? 'lrow' : ''}"><div class="ltitle"><h2>${esc(title)}</h2><span class="count">${rows.length.toLocaleString()}${live ? ` · <b class="on">${live} live</b>` : ''}</span></div>
+        ${extra ? extra.html : ''}</div>
         <div class="seg" role="tablist">${Object.keys(filters).map((f) => `<button role="tab" data-f="${f}" class="${f === mode ? 'on' : ''}" aria-selected="${f === mode}">${f}</button>`).join('')}</div>
       </div>
       <div class="rows">${rows.length ? rows.slice(0, cap).map(row).join('') : `<div class="empty">${esc(emptyMsg)}</div>`}
@@ -1474,6 +1573,7 @@ function list(el, title, ships, emptyMsg) {
     el.querySelectorAll('[data-f]').forEach((b) => (b.onclick = () => { mode = b.dataset.f; cap = RENDER_CAP; draw(); }));
     const more = el.querySelector('.more');
     if (more) more.onclick = () => { cap += RENDER_CAP; draw(); };
+    if (extra?.wire) extra.wire(el);
   };
   draw();
   // hovering a row lights the ship up on the map
@@ -1531,13 +1631,19 @@ async function route() {
       $('host').textContent = 'via ' + me.ship + (me.public ? ' · public' : '');
       try { const mine = await get('/ship/' + me.ship); myChain = new Set(mine.chain); } catch {}
     }
+    if (h.startsWith('app/')) {
+      const url = h.slice(4);
+      if (!LAUNCHED.has(url)) { location.replace('#/apps'); return; }
+      showApp(url); setTab(''); return;
+    }
+    showApp(null);
     if (h === 'pals') return await pals();
-    if (h === 'peers') return await peers();
+    if (h === 'peers') { location.replace('#/pals'); return; }
     if (h === 'apps') return await appsView();
-    if (h === 'feed') return await feedView();
+    if (h === 'feed') { location.replace('#/'); return; }
     if (h.startsWith('owner/')) return await ownerView(h.slice(6).toLowerCase());
     if (!WATCHED) { try { WATCHED = new Set((await get('/watch')).map((x) => x.ship)); } catch { WATCHED = new Set(); } }
-    if (!evNewest) pollEvents();
+    if (!evNewest) pollEvents(); else drawFeed();
     setTab('net'); mapMode(true);
     await ensureTree();
     const instant = firstRoute; firstRoute = false;
@@ -1560,22 +1666,292 @@ async function route() {
   }
 }
 
+// pals and peers on one page: %pals on the left, every ship we know on the right
 async function pals() {
-  setTab('pals'); mapMode(false); crumbs.innerHTML = '<b>%pals</b>';
-  if (!me?.pals) { $('view').innerHTML = `<section class="card empty">%pals isn't running on ${esc(me?.ship)}. Install it with <code>|install ~paldev %pals</code>.</section>`; return; }
-  const ps = await cget('/pals', 15000);
-  $('view').innerHTML = '<section class="card" id="m"></section><section class="card" id="o"></section><section class="card" id="i"></section>';
-  list($('m'), 'Mutuals ★', ps.filter((s) => s.target && s.leech), 'No mutual pals yet.');
-  list($('o'), 'You added (waiting on them)', ps.filter((s) => s.target && !s.leech), 'none');
-  list($('i'), 'Added you (pending)', ps.filter((s) => s.leech && !s.target), 'none');
+  setTab('pals'); mapMode(false); crumbs.innerHTML = `<b>pals &amp; peers</b><span class="muted crumbnote">who ${esc(me?.ship)} knows</span>`;
+  const [ps, pe, w] = await Promise.all([me?.pals ? cget('/pals', 15000) : null, cget('/peers', 15000).catch(() => []), get('/watch').catch(() => [])]);
+  if (location.hash !== '#/pals') return;
+  WATCHED = new Set(w.map((x) => x.ship));
+  pe.sort((a, b) => (b.status === 'live') - (a.status === 'live') || (b.last || 0) - (a.last || 0));
+  $('view').innerHTML = `<div class="palsgrid"><div class="palcol"><section class="card watchcard" id="wl"></section>${ps
+    ? '<section class="card" id="m"></section><section class="card" id="o"></section><section class="card" id="i"></section>'
+    : `<section class="card empty">%pals isn't running on ${esc(me?.ship)}. Install it with <code>|install ~paldev %pals</code>.</section>`}</div>
+    <div class="palcol"><section class="card peerscard" id="p"></section></div></div>`;
+  if (ps) {
+    list($('m'), 'Mutuals ★', ps.filter((s) => s.target && s.leech), 'No mutual pals yet.');
+    list($('o'), 'You added (waiting on them)', ps.filter((s) => s.target && !s.leech), 'none', {
+      html: `<form class="allyform palform" autocomplete="off"><input placeholder="add a pal: ~sampel-palnet" spellcheck="false" aria-label="Ship to add as a pal"><button>Add</button><span class="muted palnote"></span></form>`,
+      wire: (el) => (el.querySelector('.palform').onsubmit = (e) => { e.preventDefault(); addPal(e.target); }),
+    });
+    list($('i'), 'Added you (pending)', ps.filter((s) => s.leech && !s.target), 'none');
+  }
+  peerTree($('p'), pe);
+  drawWatch(w);
 }
 
-async function peers() {
-  setTab('peers'); mapMode(false); crumbs.innerHTML = '<b>ships ' + esc(me?.ship) + ' knows</b>';
-  const ps = await cget('/peers', 15000);
-  ps.sort((a, b) => (b.status === 'live') - (a.status === 'live') || (b.last || 0) - (a.last || 0));
-  $('view').innerHTML = '<section class="card" id="p"></section>';
-  list($('p'), 'Peers', ps, 'No peers yet.');
+// peers, densely: every galaxy is a band (open by default) holding a grid
+// of tiles for the stars it sponsors. A star's tile carries a field of
+// pips, one per peer under it, live first; opening it spreads its planets
+// out as chips across the band. Moons follow their planet. Ships in between
+// that aren't peers themselves are dimmed. Sorted most-live first by default.
+const ptUi = { mode: 'tree', show: 'all', sort: 'live', open: new Set(), shut: new Set() };
+try { const v = JSON.parse(localStorage.getItem('sextant-peers') || '{}'); for (const k of ['mode', 'show', 'sort']) if (v[k]) ptUi[k] = v[k]; } catch {}
+const PIPS = 120;
+const stKey = (st) => (st === 'live' || st === 'stale' || st === 'dead' ? st : 'none');
+function peerTree(el, peers) {
+  const by = new Map(peers.map((p) => [p.ship, { ...p, peer: true }]));
+  const up = (p) => (p.kind === 'galaxy' ? null : p.sponsor && p.sponsor !== p.ship ? p.sponsor : p.parent || null);
+  for (const p of [...by.values()]) {
+    let u = up(p);
+    while (u && !by.has(u)) { const q = { ship: u, kind: u.length <= 4 ? 'galaxy' : u.length <= 7 ? 'star' : 'planet', peer: false }; by.set(u, q); u = up(q); }
+  }
+  for (const p of by.values()) p.kids = [];
+  const roots = [];
+  for (const p of by.values()) { const u = up(p); (u && by.has(u) ? by.get(u).kids : roots).push(p); }
+  const keep = (p) => p.peer && (ptUi.show === 'all' || (ptUi.show === 'live' ? p.status === 'live' : p.target || p.leech));
+  // subtree totals: peers, live, last answer, and how many of each status below
+  const tot = (p) => {
+    const k = keep(p);
+    p.n = k ? 1 : 0; p.lv = k && p.status === 'live' ? 1 : 0; p.rec = k ? p.last || 0 : 0; p.pl = k && (p.target || p.leech) ? 1 : 0;
+    p.st = { live: 0, stale: 0, dead: 0, none: 0 };
+    p.old = k ? p.checked || 0 : Infinity; p.ns = k && isStale(p) ? 1 : 0;
+    for (const c of p.kids) { tot(c); p.old = Math.min(p.old, c.old); p.ns += c.ns; p.n += c.n; p.lv += c.lv; p.pl += c.pl; p.rec = Math.max(p.rec, c.rec); for (const s in p.st) p.st[s] += c.st[s]; if (keep(c)) p.st[stKey(c.status)]++; }
+  };
+  roots.forEach(tot);
+  const ord = {
+    name: (a, b) => (a.idx ?? 0) - (b.idx ?? 0) || a.ship.localeCompare(b.ship),
+    live: (a, b) => b.lv - a.lv || (b.status === 'live') - (a.status === 'live') || b.n - a.n || (b.rec || 0) - (a.rec || 0) || a.ship.localeCompare(b.ship),
+    peers: (a, b) => b.n - a.n || b.lv - a.lv || a.ship.localeCompare(b.ship),
+    recent: (a, b) => b.rec - a.rec || a.ship.localeCompare(b.ship),
+  }[ptUi.sort] || ((a, b) => b.lv - a.lv);
+  const sorted = (list) => list.filter((x) => x.n).sort(ord);
+  const save = () => { try { localStorage.setItem('sextant-peers', JSON.stringify({ mode: ptUi.mode, show: ptUi.show, sort: ptUi.sort })); } catch {} };
+  // %pals: ★ mutual, ☆ we added them (waiting), ⇠ they added us (pending)
+  const pk = (p) => (p.target && p.leech ? 'm' : p.target ? 'o' : p.leech ? 'i' : '');
+  const PALS = { m: ['★', 'mutual pal'], o: ['☆', 'you added them; waiting on them'], i: ['⇠', 'added you; add them back to be mutuals'] };
+  const pal = (p) => { const k = pk(p); return k ? `<span class="pals p${k}" title="${PALS[k][1]}">${PALS[k][0]}</span>` : ''; };
+  const pcls = (p) => (pk(p) ? ' pal p' + pk(p) : '');
+  const nm = (p) => `<a class="nm" href="#/${esc(p.ship)}" title="${esc(p.ship)}${p.peer ? '' : ' · not a peer itself'}">${esc(p.ship)}</a>`;
+  const cnt = (p) => `${p.pl - (pk(p) ? 1 : 0) > 0 ? `<span class="palct" title="${p.pl - (pk(p) ? 1 : 0)} pal${p.pl - (pk(p) ? 1 : 0) === 1 ? '' : 's'} under ${esc(p.ship)}">★${p.pl - (pk(p) ? 1 : 0)}</span>` : ''}<span class="meta" title="${p.lv} live of ${p.n} peer${p.n === 1 ? '' : 's'} here">${p.lv ? `<b class="on">${p.lv.toLocaleString()}</b>` : '0'}/${p.n.toLocaleString()}</span>`;
+  const ago_ = (p) => `<span class="meta">${esc(p.status === 'live' && p.last ? shortAgo(p.last) : '')}</span>`;
+  // one pip per peer; past PIPS, each pip stands for several, keeping the
+  // mix of live and offline in proportion (largest remainder) so a big
+  // branch never shows only its first colour
+  const pips = (st) => {
+    const ks = ['live', 'stale', 'dead', 'none'], all = ks.reduce((t, k) => t + st[k], 0);
+    if (!all) return '';
+    const per = Math.ceil(all / PIPS), slots = Math.ceil(all / per);
+    const raw = ks.map((k) => (st[k] / all) * slots), n = raw.map(Math.floor);
+    let left = slots - n.reduce((a, b) => a + b, 0);
+    raw.map((r, i) => [r - n[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0 && st[ks[i]]) { n[i]++; left--; } });
+    // a status that's there at all gets at least one pip
+    ks.forEach((k, i) => { if (st[k] && !n[i]) { const j = n.indexOf(Math.max(...n)); n[j]--; n[i] = 1; } });
+    const tip = `${st.live} live · ${st.dead} offline${st.stale ? ` · ${st.stale} quiet` : ''}${st.none ? ` · ${st.none} not checked` : ''}${per > 1 ? ` · each pip is ~${per} ships` : ''}`;
+    return `<div class="pips" title="${tip}">${ks.map((k, i) => `<i class="pip ${k}"></i>`.repeat(n[i])).join('')}${per > 1 ? `<span class="more">×${per}</span>` : ''}</div>`;
+  };
+  // one ship as a chip; a planet's moons ride along behind it
+  const chip = (p) => [`<div class="chip${keep(p) ? '' : ' via'}${pcls(p)}" data-ship="${esc(p.ship)}">${dot(p.peer ? p.status : null)}${nm(p)}${pal(p)}${ago_(p)}</div>`,
+    ...sorted(p.kids).map((m) => `<div class="chip moon${pcls(m)}" data-ship="${esc(m.ship)}"><span class="mk">↳</span>${dot(m.status)}${nm(m)}${pal(m)}${ago_(m)}</div>`)].join('');
+  // a star (or anything with ships under it) as a tile; open, it spans the band
+  const tile = (p) => {
+    const kids = sorted(p.kids);
+    if (!kids.length) return chip(p);
+    const open = ptUi.open.has(p.ship);
+    return `<div class="tile${open ? ' open' : ''}${p.peer ? '' : ' via'}${pcls(p)}" data-ship="${esc(p.ship)}">
+      <div class="thead"><button class="caret" data-t="${esc(p.ship)}" aria-expanded="${open}" aria-label="${open ? 'close' : 'open'} ${esc(p.ship)}">${open ? '▾' : '▸'}</button>${dot(p.peer ? p.status : null)}${nm(p)}${pal(p)}${cnt(p)}</div>
+      ${open ? `<div class="chips">${kids.map(chip).join('')}</div>` : pips(p.st)}</div>`;
+  };
+  const band = (g) => {
+    const shut = ptUi.shut.has(g.ship), kids = sorted(g.kids);
+    const share = g.n ? Math.round((100 * g.lv) / g.n) : 0;
+    return `<section class="band${shut ? ' shut' : ''}${pcls(g)}" data-ship="${esc(g.ship)}" style="--share:${share}%">
+      <div class="bhead">${kids.length ? `<button class="caret" data-g="${esc(g.ship)}" aria-expanded="${!shut}" aria-label="${shut ? 'open' : 'close'} ${esc(g.ship)}">${shut ? '▸' : '▾'}</button>` : '<span class="caret"></span>'}
+        ${dot(g.peer ? g.status : null)}${nm(g)}${pal(g)}<span class="bar" title="${share}% of the peers under ${esc(g.ship)} are live"><i></i></span>${age(g)}${cnt(g)}
+        <button class="rb" data-rg="${esc(g.ship)}" title="recheck every peer under ${esc(g.ship)} now">↻</button></div>
+      ${!shut && kids.length ? `<div class="tiles">${kids.map(tile).join('')}</div>` : ''}
+      ${shut && kids.length ? pips(g.st) : ''}</section>`;
+  };
+  // how long since the stalest peer in a branch was checked
+  const age = (p) => {
+    if (!p.n) return '';
+    const t = p.old, cls = !t ? 'stale' : ageClass(t), txt = !t ? 'never' : shortAgo(t);
+    const sw = SWEEP.running && SWEEP.scope.has(p.ship) ? ' sweeping' : '';
+    return `<span class="age ${cls}${sw}" title="${p.ns ? `${p.ns} of ${p.n} not checked in the last hour; ` : 'all checked within the hour; '}oldest check ${!t ? 'never' : ago(t)}">⟳ ${esc(txt)}</span>`;
+  };
+  let cap = RENDER_CAP;
+  const draw = () => {
+    const all = [...by.values()].filter(keep);
+    const live = all.filter((p) => p.status === 'live').length;
+    const npal = all.filter((p) => p.target || p.leech).length;
+    let body;
+    if (ptUi.mode === 'tree') body = sorted(roots).map(band).join('');
+    else {
+      const fl = all.map((p) => ({ ...p, kids: [], n: 1, lv: p.status === 'live' ? 1 : 0, rec: p.last || 0 })).sort(ord);
+      body = `<div class="chips flat">${fl.slice(0, cap).map(chip).join('')}</div>${fl.length > cap ? `<button class="more">show more of ${(fl.length - cap).toLocaleString()}</button>` : ''}`;
+    }
+    const anyOpen = sorted(roots).some((g) => !ptUi.shut.has(g.ship));
+    el.innerHTML = `<div class="lhead">
+        <div class="ltitle"><h2>Peers</h2><span class="count">${all.length.toLocaleString()}${live ? ` · <b class="on">${live} live</b>` : ''}${npal ? ` · <b class="palc">★ ${npal} pal${npal === 1 ? '' : 's'}</b>` : ''}</span></div>
+        <div class="ptctl">
+          <div class="seg">${['tree', 'flat'].map((m) => `<button data-m="${m}" class="${ptUi.mode === m ? 'on' : ''}">${m}</button>`).join('')}</div>
+          <div class="seg">${['all', 'live', 'pals'].map((m) => `<button data-s="${m}" class="${ptUi.show === m ? 'on' : ''}">${m}</button>`).join('')}</div>
+          <select class="ptsort" aria-label="Sort peers">${[['live', 'most live'], ['peers', 'most peers'], ['recent', 'last answered'], ['name', 'by name']].map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>
+          ${ptUi.mode === 'tree' ? `<button class="ptall">${anyOpen ? 'fold galaxies' : 'unfold galaxies'}</button>` : ''}
+        </div>
+        <div class="fresh">${freshLine(all)}</div></div>
+      <div class="ptree">${body || '<div class="empty">No peers match.</div>'}</div>`;
+    el.querySelector('.ptsort').value = ptUi.sort;
+    el.querySelector('.ptsort').onchange = (e) => { ptUi.sort = e.target.value; save(); peerTree(el, peers); };
+    el.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => { ptUi.mode = b.dataset.m; save(); cap = RENDER_CAP; draw(); }));
+    el.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => { ptUi.show = b.dataset.s; save(); peerTree(el, peers); }));
+    const pa = el.querySelector('.ptall');
+    if (pa) pa.onclick = () => { if (anyOpen) roots.forEach((g) => ptUi.shut.add(g.ship)); else ptUi.shut.clear(); draw(); };
+    const more = el.querySelector('.ptree > .more');
+    if (more) more.onclick = () => { cap += RENDER_CAP; draw(); };
+    const sb = el.querySelector('.sweepbtn');
+    if (sb) sb.onclick = () => (SWEEP.running ? stopSweep() : startSweep(all.filter(isStale), null));
+  };
+  el.onclick = (e) => {
+    const rg = e.target.closest('[data-rg]');
+    if (rg) {
+      const g = by.get(rg.dataset.rg), list = [];
+      const walk = (p) => { if (keep(p)) list.push(p); p.kids.forEach(walk); };
+      if (g) walk(g);
+      startSweep(list, g.ship);
+      return;
+    }
+    const c = e.target.closest('[data-t],[data-g]');
+    if (!c) return;
+    const sc = el.querySelector('.ptree').scrollTop;
+    if (c.dataset.g) { const g = c.dataset.g; ptUi.shut.has(g) ? ptUi.shut.delete(g) : ptUi.shut.add(g); }
+    else { const t = c.dataset.t; ptUi.open.has(t) ? ptUi.open.delete(t) : ptUi.open.add(t); }
+    draw(); el.querySelector('.ptree').scrollTop = sc;
+  };
+  el.onmouseover = (e) => {
+    const r = e.target.closest('[data-ship]'); const n = r && T?.byName.get(r.dataset.ship);
+    if (n !== sky.hover) { sky.hover = n && !n.hidden ? n : null; kick(); }
+  };
+  SWEEP.redraw = () => { if (!el.isConnected) return; const sc = el.querySelector('.ptree')?.scrollTop || 0; peerTree(el, peers); el.querySelector('.ptree').scrollTop = sc; };
+  SWEEP.peers = peers;
+  draw();
+}
+
+// freshness: when each peer was last asked (a probe sent), not when it last
+// answered. Fresh within 15 minutes, aging within the hour, stale after.
+const FRESH = 15 * 60e3, STALE = 60 * 60e3;
+const isStale = (p) => !p.checked || Date.now() - p.checked > STALE;
+const ageClass = (t) => (Date.now() - t < FRESH ? 'fresh' : Date.now() - t < STALE ? 'aging' : 'stale');
+function freshLine(all) {
+  const now = Date.now();
+  const f = all.filter((p) => p.checked && now - p.checked < FRESH).length;
+  const a = all.filter((p) => p.checked && now - p.checked >= FRESH && now - p.checked < STALE).length;
+  const st = all.length - f - a;
+  const pct = (x) => (all.length ? Math.round((100 * x) / all.length) : 0);
+  const bar = `<span class="fbar" title="${f} checked in the last 15 min · ${a} in the last hour · ${st} longer ago or never"><i class="fresh" style="width:${pct(f)}%"></i><i class="aging" style="width:${pct(a)}%"></i></span>`;
+  const btn = SWEEP.running
+    ? `<span class="muted">rechecking${SWEEP.label ? ' ' + esc(SWEEP.label) : ''} · ${SWEEP.done.toLocaleString()} of ${SWEEP.total.toLocaleString()} · ${SWEEP.out.size} out</span><button class="sweepbtn">stop</button>`
+    : st ? `<button class="sweepbtn" title="ask every peer not checked in the last hour, stalest first, at most 50 at a time">recheck ${st.toLocaleString()} stale</button>` : '<span class="muted">all checked within the hour</span>';
+  return `${bar}<span class="muted">${pct(f + a)}% checked within the hour</span>${btn}`;
+}
+
+// a recheck sweep: keep up to ~45 probes out (the agent caps at 50, shared
+// with the map's own checks), stalest first; as answers land or time out,
+// send more. Counts and colours on the page update as it goes.
+const SWEEP = { running: false, queue: [], out: new Set(), done: 0, total: 0, label: '', scope: new Set(), redraw: null, peers: null, t: 0, drawn: 0 };
+function startSweep(list, galaxy) {
+  const byShip = new Map((SWEEP.peers || []).map((p) => [p.ship, p]));
+  const fresh = list.map((p) => byShip.get(p.ship) || p).filter((p) => p.ship !== me?.ship && !SWEEP.out.has(p.ship))
+    .sort((a, b) => (a.checked || 0) - (b.checked || 0));
+  const have = new Set(SWEEP.queue.map((p) => p.ship));
+  const add = fresh.filter((p) => !have.has(p.ship));
+  // a galaxy asked for by hand jumps the queue
+  SWEEP.queue = galaxy ? [...add, ...SWEEP.queue.filter((p) => !add.includes(p))] : [...SWEEP.queue, ...add];
+  SWEEP.total += add.length;
+  if (galaxy) SWEEP.scope.add(galaxy);
+  SWEEP.label = galaxy && !SWEEP.running ? galaxy : SWEEP.running ? SWEEP.label : '';
+  if (!SWEEP.running) { SWEEP.running = true; sweepTick(); }
+  SWEEP.redraw?.();
+}
+function stopSweep() {
+  Object.assign(SWEEP, { running: false, queue: [], done: 0, total: 0, label: '' }); SWEEP.scope.clear();
+  clearTimeout(SWEEP.t); SWEEP.redraw?.();
+}
+async function sweepTick() {
+  if (!SWEEP.running) return;
+  const post = (path, body) => fetch(API + path, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const byShip = new Map((SWEEP.peers || []).map((p) => [p.ship, p]));
+  try {
+    // answers for the ones out
+    if (SWEEP.out.size) {
+      const res = await post('/status', [...SWEEP.out]);
+      if (res) for (const sh of [...SWEEP.out]) {
+        const v = res[sh]; if (!v) continue;
+        const [st, last, waiting] = v, p = byShip.get(sh);
+        if (p) { p.status = st; p.last = last; }
+        const n = T?.byName.get(sh); if (n) { n.status = st; n.last = last; prep(n); }
+        if (!waiting) { SWEEP.out.delete(sh); SWEEP.done++; }
+      }
+    }
+    // top up
+    const room = 45 - SWEEP.out.size;
+    if (room > 0 && SWEEP.queue.length) {
+      const batch = SWEEP.queue.splice(0, room);
+      const sent = await post('/recheck', batch.map((p) => p.ship));
+      if (sent === null) { SWEEP.running = false; SWEEP.label = 'failed (log in?)'; }
+      else {
+        const got = new Set(sent), now = Date.now();
+        for (const p of batch) if (got.has(p.ship)) { SWEEP.out.add(p.ship); p.checked = now; }
+        // the agent was busy: put the rest back at the front
+        SWEEP.queue.unshift(...batch.filter((p) => !got.has(p.ship)));
+      }
+    }
+  } catch {}
+  if (!SWEEP.queue.length && !SWEEP.out.size) { SWEEP.running = false; SWEEP.scope.clear(); SWEEP.done = SWEEP.total = 0; SWEEP.label = ''; cache.delete('/peers'); }
+  // redraw at most every 4s while it runs
+  if (!SWEEP.running || Date.now() - SWEEP.drawn > 4000) { SWEEP.drawn = Date.now(); SWEEP.redraw?.(); sky.dirty = true; }
+  if (SWEEP.running) SWEEP.t = setTimeout(sweepTick, 2500);
+}
+
+// send a %pals request; it shows here until they add us back, then moves to Mutuals
+async function addPal(form) {
+  const note = form.querySelector('.palnote'), ship = normalize(form.querySelector('input').value);
+  if (!ship) { note.textContent = 'enter a ship name'; return; }
+  if (ship === me?.ship) { note.textContent = "that's you"; return; }
+  form.querySelector('button').disabled = true; note.textContent = 'adding…';
+  const r = await fetch(`${API}/pal/${ship}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+  form.querySelector('button').disabled = false;
+  if (!r || !r.ok) { note.textContent = r && r.status === 403 ? 'log in first' : r && r.status === 400 ? 'not a ship name' : 'failed'; return; }
+  cache.delete('/pals'); cache.delete('/ship/' + ship);
+  pals();
+}
+
+// ship monitoring: watched ships are probed every 5 minutes, and a flip
+// (stops answering, comes back, or changes on Azimuth) is a Landscape notification
+function drawWatch(w) {
+  const el = $('wl');
+  if (!el) return;
+  w.sort((a, b) => (a.status === 'live') - (b.status === 'live') || a.ship.localeCompare(b.ship));
+  const live = w.filter((s) => s.status === 'live').length;
+  el.innerHTML = `<div class="lhead"><div class="ltitle"><h2>Watching ★</h2><span class="count">${w.length}${live ? ` · <b class="on">${live} live</b>` : ''}</span></div>
+      <form id="watchform" class="allyform" autocomplete="off">
+        <input id="watchq" placeholder="watch a ship: ~sampel-palnet" spellcheck="false" aria-label="Ship to watch">
+        <button>Watch</button><span class="muted" id="watchnote"></span>
+      </form></div>
+    <div class="watchgrid">${w.length ? w.map((s) => `<div class="wship">${dot(s.status)}<a href="#/${esc(s.ship)}" class="nm">${esc(s.ship)}</a><span class="meta">${esc(s.status === 'live' && s.last ? shortAgo(s.last) : s.status || '')}</span><button class="unwatch" data-ship="${esc(s.ship)}" title="stop watching ${esc(s.ship)}" aria-label="stop watching ${esc(s.ship)}">✕</button></div>`).join('')
+      : '<div class="empty">Not watching any ships.</div>'}</div>
+    <div class="muted watchhelp">Watched ships are checked every 5 minutes. You get a Landscape notification when one stops answering, comes back, or changes on Azimuth (breach, key change, escape, transfer).</div>`;
+  const send = async (ship, add) => {
+    const r = await fetch(`${API}/watch/${ship}`, { method: add ? 'POST' : 'DELETE', credentials: 'include' }).catch(() => null);
+    if (!r || !r.ok) { $('watchnote').textContent = r && r.status === 403 ? 'log in first' : r && r.status === 400 ? 'not a ship name' : 'failed'; return; }
+    cache.delete('/ship/' + ship);
+    const w2 = await get('/watch').catch(() => []);
+    WATCHED = new Set(w2.map((x) => x.ship));
+    drawWatch(w2);
+    kick(); drawFeed();
+  };
+  $('watchform').onsubmit = (e) => { e.preventDefault(); const sh = normalize($('watchq').value); if (sh) send(sh, true); else $('watchnote').textContent = 'enter a ship name'; };
+  el.querySelectorAll('.unwatch').forEach((b) => (b.onclick = () => send(b.dataset.ship, false)));
 }
 
 // ---------------------------------------------------------------- apps
@@ -1583,7 +1959,7 @@ async function peers() {
 // Every app our ship knows is published anywhere, via %treaty: from the
 // publishers it follows (allies), including any added here.
 
-const appsUi = { q: '', by: null, hideHave: false, poll: 0, sort: 'popular' };
+const appsUi = { q: '', by: null, hideHave: false, hideNot: false, poll: 0, sort: 'popular' };
 try { appsUi.sort = localStorage.getItem('sextant-appsort') || 'popular'; } catch {}
 // trending: every install counts 1 now, halving each day after
 const trend = (ats) => ats.reduce((t, at) => t + Math.pow(0.5, Math.max(0, Date.now() - at) / 86400000), 0);
@@ -1621,16 +1997,20 @@ async function appsView() {
         <div class="seg" role="tablist" id="appsort">
           <button data-s="popular">popular</button><button data-s="trending">trending</button><button data-s="az">a–z</button>
         </div>
-        <label class="muted"><input type="checkbox" id="apphave"> hide installed</label>
+        <select id="appby" aria-label="Publisher"></select>
+        <div class="apphide"><label class="muted"><input type="checkbox" id="apphave"> hide installed</label>
+          <label class="muted"><input type="checkbox" id="appnot"> hide uninstalled</label></div>
       </div>
       <div class="sharerow muted"><label><input type="checkbox" id="appshare"> share my installs</label>
         <span>Install counts come from mutual pals running sextant, and their pals (2 hops), like %hits. Each install is anonymous; only apps installed from a publisher count.</span></div>
-      <div class="chips" id="appby"></div>
       <div class="appnote muted" id="appnote"></div>
       <div class="appgrid" id="appgrid"></div>
     </section>`;
     $('appq').oninput = (e) => { appsUi.q = e.target.value.toLowerCase(); drawApps(appsUi.cat); };
-    $('apphave').onchange = (e) => { appsUi.hideHave = e.target.checked; drawApps(appsUi.cat); };
+    $('appby').onchange = (e) => { appsUi.by = e.target.value || null; drawApps(appsUi.cat); };
+    // the two hides are exclusive: both on would show nothing
+    $('apphave').onchange = (e) => { appsUi.hideHave = e.target.checked; if (appsUi.hideHave) appsUi.hideNot = $('appnot').checked = false; drawApps(appsUi.cat); };
+    $('appnot').onchange = (e) => { appsUi.hideNot = e.target.checked; if (appsUi.hideNot) appsUi.hideHave = $('apphave').checked = false; drawApps(appsUi.cat); };
     $('appsort').querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => {
       appsUi.sort = b.dataset.s;
       try { localStorage.setItem('sextant-appsort', appsUi.sort); } catch {}
@@ -1643,7 +2023,7 @@ async function appsView() {
     };
     $('allyform').onsubmit = (e) => { e.preventDefault(); addPublisher(normalize($('allyq').value)); };
   }
-  $('apphave').checked = appsUi.hideHave; $('appq').value = appsUi.q; $('appshare').checked = !!c.share;
+  $('apphave').checked = appsUi.hideHave; $('appnot').checked = appsUi.hideNot; $('appq').value = appsUi.q; $('appshare').checked = !!c.share;
   appsUi.cat = c;
   drawApps(c);
 }
@@ -1660,11 +2040,11 @@ function drawApps(c) {
   for (const a of apps) pubs.set(a.ship, (pubs.get(a.ship) || 0) + 1);
   for (const al of c.allies) if (!pubs.has(al.ship)) pubs.set(al.ship, 0);
   if (appsUi.by && !pubs.has(appsUi.by)) appsUi.by = null;
-  $('appby').innerHTML = [`<button data-by="" class="${appsUi.by ? '' : 'on'}">all <span>${apps.length}</span></button>`,
-    ...[...pubs].sort((a, b) => b[1] - a[1]).map(([s, n]) => `<button data-by="${esc(s)}" class="${appsUi.by === s ? 'on' : ''}">${esc(s)} <span>${n}</span></button>`)].join('');
-  $('appby').querySelectorAll('[data-by]').forEach((b) => (b.onclick = () => { appsUi.by = b.dataset.by || null; drawApps(c); }));
+  $('appby').innerHTML = [`<option value="">all publishers (${apps.length})</option>`,
+    ...[...pubs].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([s, n]) => `<option value="${esc(s)}">${esc(s)} (${n})</option>`)].join('');
+  $('appby').value = appsUi.by || '';
   const q = appsUi.q;
-  const shown = apps.filter((a) => (!appsUi.by || a.ship === appsUi.by) && (!appsUi.hideHave || !a.installed)
+  const shown = apps.filter((a) => (!appsUi.by || a.ship === appsUi.by) && (!appsUi.hideHave || !a.installed) && (!appsUi.hideNot || a.installed)
     && (!q || [a.title, a.desk, a.info, a.ship].some((x) => (x || '').toLowerCase().includes(q))));
   const heard = apps.reduce((t, a) => t + a.n, 0);
   $('appn').textContent = `${shown.length} of ${apps.length} · ${pubs.size} publishers · ${heard} installs heard of`;

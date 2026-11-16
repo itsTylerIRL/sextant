@@ -63,15 +63,29 @@ If a hop is silent but a ship behind it answered, that hop is up and has probabl
 
 ### Apps on the network
 
-![the Apps tab](docs/screenshots/v1.1/apps.png)
+![the Apps tab](docs/screenshots/v1.2/apps.png)
 
-The **Apps** tab lists every app your ship knows is published, from the publishers it follows through `%treaty`. Search them, filter by publisher, hide what you have, install with a click, or **add a publisher** by name to see what it offers.
+The **Apps** tab lists every app your ship knows is published, from the publishers it follows through `%treaty`. Search them, pick a publisher from the dropdown, **hide installed** or **hide uninstalled**, install with a click, or **add a publisher** by name to see what it offers.
+
+Apps you have get **Launch** and **Uninstall**. Launch opens the app inside Sextant, under its top bar, with a tab of its own next to Network, Pals and Apps. Several can be open at once and stay loaded while you look at the map; the tabs fit their names, and the strip scrolls once it fills. ✕ (or Esc) closes one and takes you back to where you opened it. Uninstall is the same as `|uninstall`: the app stops and its data stays, so reinstalling brings it back.
 
 **Popular with your pals.** Like [`%hits`](https://github.com/iko-soy/hits), Sextant gossips installs: each app you installed *from a publisher* is one anonymous "hit", shared with your mutual pals who run Sextant and relayed one more hop to theirs (via [`/lib/gossip`](https://github.com/fang-/suite)). Each install carries a random id, so relayed copies count once and an uninstall takes its hit back. The Apps tab can then rank apps as **popular** (installs heard of nearby) or **trending** (each install counts half as much each day), and shows apps you only know about through pals. Desks you made yourself (`|new-desk`, or installed from a file) are never shared, and **share my installs** turns it off.
 
+### Pals and peers
+
+![the Pals tab](docs/screenshots/v1.2/pals.png)
+
+The **Pals** tab puts the ships you care about on one page:
+
+- **Watching ★** at the top: add a ship by name, see each one's status, and ✕ to stop. You get a Landscape notification when a watched ship stops answering, comes back, or changes on Azimuth.
+- **%pals** below it: mutuals, the pals you added (with a box to add more), and the ones who added you.
+- **Peers** on the right: every ship your ship has talked to, packed into a grid. Each galaxy is a band, open by default, with a bar for how much of it is live. Its stars are tiles with one pip per peer under them (live first, and in proportion once a pip stands for several ships); open a tile to spread its planets out as chips. Sort by most live, most peers, last answered or name; filter to live ships or pals; or flip to one flat list. Pals are outlined: ★ mutual, ☆ you added them, ⇠ they added you.
+
+**Is the count current?** Each galaxy band shows how long since its stalest peer was checked (green within 15 minutes, gold within the hour, red after that or never), and the header shows how much of the list was checked within the hour. **Recheck stale** asks every peer that's gone an hour without a check, stalest first; the **↻** on a band rechecks that galaxy now. A recheck keeps about 45 requests out at once and tops up as answers land, and the counts update as it goes. Asking a ship makes it a peer, so rechecking also grows the list with ships your ship hadn't heard from.
+
 ### Azimuth feed and owners
 
-The **Feed** tab lists what `%azimuth` reports as it happens: breaches, first boots and key changes, escape requests and cancellations, completed escapes, transfers and moves to layer 2. New events also pop up on the map, and a completed escape glides the ship over to its new sponsor. The ships you watch are listed at the top.
+The **Feed** sits under the ship list on the Network page: what `%azimuth` reports as it happens, filtered by kind. Breaches, first boots and key changes, escape requests and cancellations, completed escapes, transfers and moves to layer 2. New events also pop up on the map, and a completed escape glides the ship over to its new sponsor.
 
 Click **◎** next to any address, or search for an `0x…` address, to see every point it owns or is a proxy for, and highlight them on the map.
 
@@ -134,14 +148,16 @@ All routes are under `/apps/sextant/api` and return JSON. Owner-only routes need
 | `GET /tree` | every galaxy and every sponsored star as compact rows (cached) |
 | `GET /ship/~p` | one point in detail: sponsor, chain, keys, proxies, pal receipt |
 | `GET /residents/~p` | ships `~p` sponsors, plus pending escape requests |
-| `GET /pals`, `GET /peers` | your pals; every ship (and moon) your ship has talked to |
+| `GET /pals`, `GET /peers` | your pals; every ship (and moon) your ship has talked to, with when each was last checked |
 | `POST /status` | `["~zod", …]` → `{ship: [status, last, waiting]}`; the owner's reads also probe ships that are due |
+| `POST /recheck` | `["~zod", …]`: probe these now, even if checked lately or backing off, but at most 50 out at once; answers the ships it sent (owner) |
 | `POST /trace/~p`, `GET /trace/~p` | probe every hop between you and `~p` (owner); the hops with status, round trip and address kind |
 | `POST /hi/~p` | say hi to `~p`, like `\|hi` (owner) |
 | `GET /catalog` | every known published app, the publishers you follow, and gossiped install counts |
 | `GET /apps/~p` | apps `~p` publishes, via `%treaty` |
 | `POST /apps/~p` | follow `~p` as a publisher through `%treaty` (owner) |
-| `POST /install/~p/desk` | install a desk from `~p` (owner) |
+| `POST /install/~p/desk` | install a desk from `~p`, reviving it if it was uninstalled (owner) |
+| `POST /uninstall/desk` | uninstall one of your desks, like `\|uninstall`; not `%base` or Sextant itself (owner) |
 | `POST /share/on`, `/share/off` | share your app installs with pals, or not (owner) |
 | `GET /events` | recent Azimuth events, newest first |
 | `GET /owner/0x…` | every point an address owns or is a proxy for |

@@ -126,8 +126,9 @@ button.primary:hover { background: color-mix(in srgb, var(--accent) 12%, transpa
   .explore { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 360px; }
   .stage { height: auto; min-height: 0; }
   .side { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-  .panel { flex: none; max-height: 58%; overflow: auto; }
-  .listcard { flex: 1; min-height: 0; overflow: auto; }
+  .panel { flex: none; max-height: 50%; overflow: auto; }
+  .listcard { flex: 3 1 0; min-height: 120px; overflow: auto; }
+  .feedcard { flex: 2 1 0; min-height: 110px; overflow: auto; }
   #view { overflow: auto; min-height: 0; }
 }
 .side { display: flex; flex-direction: column; gap: 12px; }
@@ -330,3 +331,166 @@ b.on { color: var(--live); font-weight: 600; }
 .ownhead code { font: 13px var(--mono); word-break: break-all; }
 .ownhead .stats { color: var(--muted); font-size: 12px; }
 .ownhead button { font-size: 12px; padding: 5px 11px; margin: 0; }
+
+/* publisher filter: a dropdown, so many publishers don't take over the page */
+#appby { max-width: 260px; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+         border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); }
+#appby:focus { outline: 1px solid var(--accent); }
+
+/* installed apps: launch / uninstall */
+.appbtns { display: flex; gap: 4px; flex: none; }
+.app button.appuninstall { border-color: var(--line); color: var(--muted); }
+.app button.appuninstall:hover { border-color: var(--dead); color: var(--dead); }
+
+/* a launched app, framed over sextant */
+.appframe { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; flex-direction: column; background: var(--bg); }
+.appframe iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.appframe[hidden] { display: none; }
+
+/* feed card under the ship list */
+.feedcard { padding: 0; display: flex; flex-direction: column; }
+.feedcard .lhead { position: sticky; top: 0; background: var(--panel); z-index: 1; flex-direction: row; align-items: center; justify-content: space-between; padding: 8px 14px 6px; }
+#evk { max-width: 170px; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+       border-radius: 6px; padding: 3px 6px; font: 11px var(--mono); }
+.watchrow { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 0 14px 4px; font: 11px var(--mono); }
+.watchrow a { color: var(--accent); text-decoration: none; }
+.watchrow a:hover { text-decoration: underline; }
+.feedcard .evrows { padding: 2px 6px 8px; }
+.feedcard .evrow { grid-template-columns: 52px 16px minmax(0, 1fr); gap: 6px; padding: 3px 6px; font-size: 11.5px; }
+
+/* pals & peers side by side */
+.palsgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.palcol { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 900px) { .palsgrid { grid-template-columns: 1fr; } }
+
+/* watching card, top of Pals */
+.watchcard .lhead { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.watchgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 12px; padding: 6px 14px 4px; }
+.wship { display: flex; align-items: center; gap: 7px; min-width: 0; font: 12px var(--mono); padding: 3px 4px; border-radius: 6px; }
+.wship:hover { background: var(--bg); }
+.wship .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; }
+.wship .meta { color: var(--muted); font-size: 11px; }
+.wship .unwatch { border: 0; padding: 0 4px; font-size: 11px; color: var(--muted); }
+.wship .unwatch:hover { color: var(--dead); }
+.watchhelp { font-size: 11px; padding: 4px 14px 12px; }
+#watchnote { font-size: 11px; }
+
+/* peers can be thousands of ships: the card keeps to the window and scrolls inside */
+#view .peerscard { display: flex; flex-direction: column; overflow: hidden; max-height: 75vh; }
+#view .peerscard .rows { flex: 1; min-height: 0; overflow: auto; }
+@media (min-width: 901px) {
+  #view:has(> .palsgrid) { flex: 1; overflow: hidden; }
+  #view > .palsgrid { flex: 1; min-height: 0; align-items: stretch; }
+  .palsgrid > .palcol { min-height: 0; overflow: auto; }
+  .palsgrid > .palcol:first-child { align-self: start; max-height: 100%; }
+  #view .peerscard { max-height: 100%; }
+}
+
+.palform .palnote { font-size: 11px; }
+#view .allyform { align-items: center; }
+#view .allyform input { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); }
+
+/* a list header with a form beside the title, like the Watching card */
+.lrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.lrow .ltitle .count { margin-left: 0; }
+
+/* peers tree */
+.ptctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ptctl .seg { align-self: auto; }
+.ptsort { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: 11px var(--mono); }
+.ptall { font-size: 11px; padding: 3px 9px; color: var(--muted); }
+#view .peerscard .ptree { flex: 1; min-height: 0; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+  scroll-snap-type: y proximity; scrollbar-width: thin; }
+.ptree .caret { flex: none; width: 16px; border: 0; padding: 0; font-size: 13px; line-height: 1; color: var(--ink); opacity: .7; text-align: center; background: none; }
+.ptree .caret:hover { color: var(--accent); opacity: 1; }
+.ptree .nm { color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ptree .nm:hover { color: var(--accent); }
+.ptree .pals { color: var(--accent); font-size: 10px; }
+.ptree .meta { margin-left: auto; flex: none; font-size: 10px; color: var(--muted); padding-left: 6px; }
+.ptree .dot { width: 6px; height: 6px; flex: none; }
+.ptree .dot.live { box-shadow: 0 0 4px var(--live); }
+.ptree .via > .nm, .ptree .via > .thead > .nm, .ptree .via > .bhead > .nm { opacity: .45; }
+
+/* a galaxy: a band with a live-share bar and its stars below */
+.band { scroll-snap-align: start; border-radius: 9px; border: 1px solid var(--line); padding: 5px 6px 6px;
+  background: var(--bg); }
+.bhead { display: flex; align-items: center; gap: 7px; height: 22px; font: 600 13px var(--mono); position: sticky; top: -8px; z-index: 1; }
+.bhead .bar { flex: 1; height: 2px; min-width: 20px; margin: 0 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bhead .bar i { display: block; height: 100%; width: var(--share); background: var(--live); }
+.band > .pips { margin: 4px 0 0 23px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 4px; margin-top: 5px; }
+
+/* a star: name, count, and a pip per peer under it */
+.tile { min-width: 0; border-radius: 7px; padding: 4px 6px 5px 3px; background: var(--panel); border: 1px solid transparent; }
+.tile:hover { border-color: var(--line); }
+.tile.open { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.thead { display: flex; align-items: center; gap: 5px; font: 11.5px var(--mono); height: 18px; }
+.thead .nm { flex: none; }
+.thead .meta { min-width: 0; overflow: hidden; }
+.thead .caret { width: 13px; font-size: 11px; }
+.pips { display: flex; flex-wrap: wrap; gap: 1px; margin: 4px 0 0 18px; }
+.pip { width: 4px; height: 4px; border-radius: 1px; background: var(--none); }
+.pip.live { background: var(--live); }
+.pip.stale { background: var(--stale); }
+.pip.dead { background: color-mix(in srgb, var(--dead) 70%, transparent); }
+.pips .more { font: 9px/4px var(--mono); color: var(--muted); padding-left: 3px; }
+
+/* ships with nothing under them: chips, packed tight */
+.chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 1px 6px; margin: 5px 0 0 16px; }
+.tiles > .chip { background: var(--panel); border-radius: 7px; }
+.chips.flat { margin: 0; }
+.chip { display: flex; align-items: center; gap: 5px; height: 21px; padding: 0 5px; min-width: 0; border-radius: 5px; font: 11px var(--mono); }
+.chip:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.chip.moon .mk { color: var(--muted); font-size: 10px; margin-left: 2px; }
+.chip.moon { opacity: .85; }
+.ptree > .more { margin-top: 6px; font-size: 11px; padding: 5px; color: var(--muted); }
+.ptree .empty { padding: 10px 8px; font-size: 12px; }
+
+/* %pals in the peers grid: ★ mutual, ☆ you added, ⇠ added you */
+.ptree .pals { font-size: 11px; flex: none; }
+.ptree .pals.pm { color: var(--accent); }
+.ptree .pals.po { color: var(--accent); opacity: .75; }
+.ptree .pals.pi { color: var(--unborn); }
+.ptree .pal.pm, .ptree .pal.po { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+.ptree .pal.pi { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--unborn) 55%, transparent); }
+.ptree .pal > .nm, .ptree .pal > .thead > .nm, .ptree .pal > .bhead > .nm { color: var(--accent); }
+.ptree .palct { flex: none; margin-left: auto; font: 10px var(--mono); color: var(--accent); }
+.ptree .palct + .meta { margin-left: 0; }
+b.palc { color: var(--accent); font-weight: 600; }
+
+/* header: open-app tabs fill the space between the nav and the search, then scroll */
+.apptabs { flex: 1 1 0; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
+.apptabs::-webkit-scrollbar { display: none; }
+.apptabs:empty { mask-image: none; }
+.apptab { flex: 0 0 auto; max-width: 200px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px;
+  border-radius: 6px; border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 13px; }
+.apptab span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apptab:hover { color: var(--ink); }
+.apptab.on { background: var(--panel); color: var(--ink); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.apptab .afx { flex: none; border: 0; padding: 0 3px; font-size: 11px; color: var(--muted); line-height: 1; background: none; }
+.apptab .afx:hover { color: var(--dead); }
+@media (min-width: 761px) {
+  .top { flex-wrap: nowrap; }
+  #search { flex: 0 0 260px; }
+  .host { flex: 0 1 auto; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 0; }
+}
+@media (max-width: 760px) { .apptabs { order: 5; flex-basis: 100%; } .apptabs:empty { display: none; } }
+.apphide { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+
+/* peers freshness: how recently each galaxy's ships were checked */
+.fresh { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font: 11px var(--mono); }
+.fresh .fbar { flex: 0 0 120px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--dead) 35%, var(--line)); overflow: hidden; display: flex; }
+.fresh .fbar i { display: block; height: 100%; }
+.fresh .fbar i.fresh { background: var(--live); }
+.fresh .fbar i.aging { background: var(--accent); }
+.fresh .sweepbtn { font-size: 11px; padding: 2px 9px; margin-left: auto; border-color: var(--accent); color: var(--accent); }
+.ptree .age { flex: none; font: 10px var(--mono); }
+.ptree .age.fresh { color: var(--live); }
+.ptree .age.aging { color: var(--accent); }
+.ptree .age.stale { color: var(--dead); opacity: .8; }
+.ptree .age.sweeping { animation: agepulse 1.2s ease-in-out infinite; }
+@keyframes agepulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .ptree .age.sweeping { animation: none; text-decoration: underline dotted; } }
+.ptree .rb { flex: none; border: 0; padding: 0 3px; font-size: 12px; line-height: 1; color: var(--muted); background: none; }
+.ptree .rb:hover { color: var(--accent); }
